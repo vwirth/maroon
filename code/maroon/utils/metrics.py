@@ -193,7 +193,7 @@ def projective_error_without_open3d(p1, dest_depth, proj, mask_src=None, mask_de
     assert p1.shape[1] == 3
 
     mod = load_kernel_from_cu(os.path.join(
-        os.path.dirname(__file__), "cuda", "metrics.cu"))
+        os.path.dirname(os.path.dirname(__file__)), "cuda", "metrics.cu"))
     error = np.zeros((p1.shape[0],)).astype(np.float32).reshape(-1)
 
     points_cpu = p1.reshape(-1, 3)
