@@ -19,7 +19,8 @@ It includes a python-based dataset viewer and provides data preprocessing code f
 
 Furthermore, it includes the reconstruction code for the MIMO imaging radar measurements.
 
-![viewer](assets/viewer.gif)
+<img src="assets/viewer.gif" height="555"><img src="assets/viewmode.gif" height="555">
+
 
 ## Table of Contents
 * [Dependencies](#dependencies)

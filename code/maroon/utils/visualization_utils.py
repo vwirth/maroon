@@ -656,7 +656,7 @@ class SensorVisualizer(AppWindow):
                                                                                        cmap_error=cmap_error,
                                                                                        src_indices=src_indices,
                                                                                        dest_indices=dest_indices)
-            if False:
+            if True:
                 show_legend(src_error, max_error=self.max_error,
                             error_type=error_type_to_str(self.error_type))
 
@@ -1281,7 +1281,7 @@ def show_legend(error, max_error=0.01, cmap="coolwarm", error_type="chamfer"):
                             line_dash="dot", line_color="black")
     scale_fig.show()
 
-    scale_fig.write_image("scale.svg")
+    # scale_fig.write_image("scale.svg")
 
 
 def reset_visualizer_options():
