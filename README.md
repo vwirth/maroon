@@ -47,7 +47,7 @@ A short explanation of all important configuration settings is provided here:
 | Variable | Description |
 | --- | --- |
 | `base_path` | The base path where the dataset lies, e.g. `<your-path-to>/maroon` |
-| `reconstruction_path` | If you enabled `use_relative_paths`, the object directory name that you want to visualize suffices, e.g. `02_cardboard_30` |
+| `reconstruction_path` | If you enabled `use_relative_paths`, a combination of the object directory name and the distance that you want to visualize is necessary, e.g. `02_cardboard/30` |
 | `use_empty_space_measurements` | MAROON provides additional radar measurements of the empty space of the setup, where no object was placed in front of the sensor. This measurement helps to filter out noise artifacts that arise from external sources that were present in the measurement room. |
 | `mask_erosion` | The kernel size of the KxK mask erosion kernel that is applied during the computation of the error metrics |
 | `radar:force_redo` | By default, the radar dataset loader uses the cached reconstructions within the dataset to load the respective reconstruction volume (`volume`), pointcloud (`xyz`), depth map (`depth`), or amplitude map (`maxproj`). If you explicitely want to trigger the reconstruction algorithms, set this flag to true. |
@@ -69,6 +69,16 @@ The live viewer can be executed with:
 cd code;
 python main.py
 ```
+
+# Acknowledgements
+
+The authors would like to thank the Rohde & Schwarz GmbH & Co. KG (Munich, Germany) for providing the radar imaging devices. 
+
+This work was funded by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) – SFB 1483 – Project-ID 442419336, EmpkinS.
+
+The authors gratefully acknowledge the scientific support and HPC resources provided by the Erlangen National High Performance Computing Center of the Friedrich-Alexander-Universität Erlangen-Nürnberg. 
+
+# Citation
 
 
 [cc-by-nc]: https://creativecommons.org/licenses/by-nc/4.0/

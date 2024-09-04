@@ -43,30 +43,27 @@ def visualize_alignment(config, num_frames=1,
         with open(metadata_file, "r") as f:
             metadata = json.load(f)
 
-    assert "calibration" in metadata and len(metadata["calibration"]) > 0
-    assert use_relative
-    calib_path_tmp = os.path.join(base_path, metadata["calibration"])
-    if os.path.exists(calib_path_tmp):
-        calib_path = calib_path_tmp
+    if os.path.exists(os.path.join(
+            base_path, config["reconstruction_path"], config["calibration_filename"])):
+        calib_path = (os.path.join(
+            base_path, config["reconstruction_path"]))
+    else:
+        assert "calibration" in metadata and len(metadata["calibration"]) > 0
+        assert use_relative
+        calib_path_tmp = os.path.join(
+            base_path, "00_registration", metadata["calibration"])
+        if os.path.exists(calib_path_tmp):
+            calib_path = calib_path_tmp
 
     print("using calib path: ", calib_path)
 
     calib = {}
-    calib_path = os.path.join(
-        calib_path, config["calibration_filename"])
-    with open(calib_path, "r") as f:
+    with open(os.path.join(calib_path, config["calibration_filename"]), "r") as f:
         calib = json.load(f)
-
-    if num_frames > 1:
-        matches = [(i, i) for i in range(0, num_frames)]
-    else:
-        matches = [(frame_index, frame_index)]
 
     # We need to initialize the application, which finds the necessary shaders
     # for rendering and prepares the cross-platform window abstraction.
     o3d.visualization.gui.Application.instance.initialize()
-
-    print("------------------ frame index: ", matches[0])
 
     vis = vu.SensorVisualizer(2000, 2000)
     create_isometric = False
