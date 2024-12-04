@@ -139,7 +139,8 @@ def visualize_alignment(config, num_frames=1,
         "zed": {"index": frame_index, "use_mask": use_masks, "isometric": create_isometric, "mask_erosion": zed_erosion,
                 "use_gt_mask": use_gt_mask},
     }
-    vis.initialize_sensors(sensor_data, config, calib, base_path=os.path.join(
+
+    vis.initialize_sensors(sensor_data, config["sensors_in_use"], config, calib, base_path=os.path.join(
         base_path, config["reconstruction_path"]), radar_reconstruction_method="fscw", averaging=averaging_factor,
         triangulation_threshold=triangulation_threshold, error_type=error_type, use_dest_mask=use_dest_mask,
         dot_thresh=dot_thresh, max_error=max_error, mask_bbmin=mask_bbmin, mask_bbmax=mask_bbmax)

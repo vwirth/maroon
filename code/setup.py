@@ -13,9 +13,6 @@ setup(
     author='Vanessa Wirth',
     packages=find_packages(),
     install_requires=[
-        'pykinect_azure',
-        'pyzed',
-        'pyrealsense2',
         'numpy',
         'opencv-python',
         "scipy",

@@ -1,8 +1,4 @@
-from maroon.sensors.kinect_data_loader import KinectDataLoader
-from maroon.sensors.radar_data_loader import RadarDataLoader
-from maroon.sensors.camera_data_loader import CameraDataLoader
-from maroon.sensors.zed_data_loader import ZEDDataLoader
-from maroon.sensors.realsense_data_loader import RealsenseDataLoader
+
 import maroon.utils.pointcloud_utils as pu
 
 import matplotlib
@@ -30,6 +26,8 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
     aux = []
 
     if sensor_type == "radar":
+        from maroon.sensors.radar_data_loader import RadarDataLoader
+
         use_empty_space_measurements = config["use_empty_space_measurements"]
         radar_loader = RadarDataLoader(data_path, **config["radar"]["reconstruction_capture_params"],
                                        **config["radar"]["reconstruction_reco_params"],
@@ -77,6 +75,8 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
                 mask = manual_mask
 
     elif sensor_type == "kinect":
+        from maroon.sensors.kinect_data_loader import KinectDataLoader
+
         kinect_loader = KinectDataLoader(data_path, space=kinect_space)
 
         kinect_rgb, kinect_depth, kinect_depth_t, kinect_points, kinect_normals = kinect_loader.get_frame(
@@ -111,6 +111,8 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
                 mask = manual_mask
 
     elif sensor_type == "photogrammetry":
+        from maroon.sensors.camera_data_loader import CameraDataLoader
+
         photo_loader = CameraDataLoader(data_path)
         mesh = photo_loader.get_mesh(
             do_smoothing=True, use_mask=use_mask)
@@ -128,6 +130,8 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
             mask = np.ones_like(depth).astype(np.uint8)
 
     elif sensor_type == "realsense":
+        from maroon.sensors.realsense_data_loader import RealsenseDataLoader
+        
         rs_frame_index = frame_index
 
         realsense_loader = RealsenseDataLoader(data_path)
@@ -153,7 +157,7 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
                 mask = manual_mask
 
     elif sensor_type == "zed":
-
+        from maroon.sensors.zed_data_loader import ZEDDataLoader
         zed_frame_index = frame_index
 
         zed_loader = ZEDDataLoader(data_path)

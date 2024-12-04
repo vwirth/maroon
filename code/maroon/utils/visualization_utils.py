@@ -1,7 +1,7 @@
 
 
 import maroon.utils.spatial_alignment as salign
-from maroon.sensors.kinect_data_loader import KinectDataLoader
+
 from maroon.utils.visualization_types import *
 import maroon.utils.metrics as metrics
 import maroon.utils.data_utils as du
@@ -184,12 +184,13 @@ class SensorVisualizer(AppWindow):
         self.error_destination = "radar"
         self.vis_type = "Color"
 
-    def initialize_sensors(self, sensor_data, config, calib, base_path="",
+    def initialize_sensors(self, sensor_data, sensor_in_use, config, calib, base_path="",
                            radar_reconstruction_method="fscw", averaging=1,
                            triangulation_threshold=0.01,
                            error_type=ERROR_TYPES["chamfer"], use_dest_mask=False,
                            dot_thresh=0.8, max_error=0.01, mask_bbmin=[None, None, None], mask_bbmax=[None, None, None]):
         self.sensor_data = sensor_data
+        self.sensors_in_use = sensor_in_use
         self.config = config
         self.calib = calib
         self.radar_reconstruction_method = radar_reconstruction_method
@@ -226,37 +227,41 @@ class SensorVisualizer(AppWindow):
                 else:
                     sensor_data[k]["path"] = os.path.join(base_path, k)
 
-        if self.sensor_data["kinect"]["data_space"] == "depth" and (not "space" in self.calib["kinect_calib"] or self.calib["kinect_calib"]["space"] == "color"):
-            kinect_loader = KinectDataLoader(
-                self.sensor_data["kinect"]["path"], space=self.sensor_data["kinect"]["data_space"])
-            K = np.array(kinect_loader.get_extrinsics("color", "depth"))
-            K_inv = np.array(kinect_loader.get_extrinsics("depth", "color"))
-            for key in self.calib.keys():
-                if "2kinect" in key:
-                    M = np.array(self.calib[key]).reshape(4, 4)
-                    M = np.matmul(K, M)
-                    self.calib[key] = M.tolist()
-                elif "kinect2" in key:
-                    M = np.array(self.calib[key]).reshape(4, 4)
-                    M = np.matmul(M, K_inv)
-                    self.calib[key] = M.tolist()
-            print("******** Applying calibration correction: color -> depth")
+        if "kinect" in self.sensors_in_use:
+            from maroon.sensors.kinect_data_loader import KinectDataLoader
 
-        if self.sensor_data["kinect"]["data_space"] == "color" and ("space" in self.calib["kinect_calib"] and self.calib["kinect_calib"]["space"] == "depth"):
-            kinect_loader = KinectDataLoader(
-                self.sensor_data["kinect"]["path"], space=self.sensor_data["kinect"]["data_space"])
-            K_inv = np.array(kinect_loader.get_extrinsics("color", "depth"))
-            K = np.array(kinect_loader.get_extrinsics("depth", "color"))
-            for key in self.calib.keys():
-                if "2kinect" in key:
-                    M = np.array(self.calib[key]).reshape(4, 4)
-                    M = np.matmul(K, M)
-                    self.calib[key] = M.tolist()
-                elif "kinect2" in key:
-                    M = np.array(self.calib[key]).reshape(4, 4)
-                    M = np.matmul(M, K_inv)
-                    self.calib[key] = M.tolist()
-            print("******** Applying calibration correction: depth -> color")
+            if self.sensor_data["kinect"]["data_space"] == "depth" and (not "space" in self.calib["kinect_calib"] or self.calib["kinect_calib"]["space"] == "color"):
+                
+                kinect_loader = KinectDataLoader(
+                    self.sensor_data["kinect"]["path"], space=self.sensor_data["kinect"]["data_space"])
+                K = np.array(kinect_loader.get_extrinsics("color", "depth"))
+                K_inv = np.array(kinect_loader.get_extrinsics("depth", "color"))
+                for key in self.calib.keys():
+                    if "2kinect" in key:
+                        M = np.array(self.calib[key]).reshape(4, 4)
+                        M = np.matmul(K, M)
+                        self.calib[key] = M.tolist()
+                    elif "kinect2" in key:
+                        M = np.array(self.calib[key]).reshape(4, 4)
+                        M = np.matmul(M, K_inv)
+                        self.calib[key] = M.tolist()
+                print("******** Applying calibration correction: color -> depth")
+
+            if self.sensor_data["kinect"]["data_space"] == "color" and ("space" in self.calib["kinect_calib"] and self.calib["kinect_calib"]["space"] == "depth"):
+                kinect_loader = KinectDataLoader(
+                    self.sensor_data["kinect"]["path"], space=self.sensor_data["kinect"]["data_space"])
+                K_inv = np.array(kinect_loader.get_extrinsics("color", "depth"))
+                K = np.array(kinect_loader.get_extrinsics("depth", "color"))
+                for key in self.calib.keys():
+                    if "2kinect" in key:
+                        M = np.array(self.calib[key]).reshape(4, 4)
+                        M = np.matmul(K, M)
+                        self.calib[key] = M.tolist()
+                    elif "kinect2" in key:
+                        M = np.array(self.calib[key]).reshape(4, 4)
+                        M = np.matmul(M, K_inv)
+                        self.calib[key] = M.tolist()
+                print("******** Applying calibration correction: depth -> color")
 
     def execute_script(self, script, *args):
         script(self, *args)
@@ -346,6 +351,10 @@ class SensorVisualizer(AppWindow):
         self.export_geometry(sensor_type, path)
 
     def show_sensor(self, sensor_type, visible, changed_clipping=False, clip_min=None, clip_max=None):
+        if not sensor_type in self.sensors_in_use:
+            print("Sensor '{}' is not listed in 'sensor_in_use' option. Ignoring data loading process...".format(sensor_type))
+            return
+        
         self.sensors_enabled[sensor_type].checked = visible
         self.sensor_masks[sensor_type].checked = self.sensor_data[sensor_type]["use_mask"]
         self.sensor_isometric[sensor_type].checked = self.sensor_data[sensor_type]["isometric"]
