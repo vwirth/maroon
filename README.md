@@ -17,7 +17,7 @@ It includes a python-based dataset viewer and provides data preprocessing code f
 * Rohde & Schwarz's QAR50 radar submodule
 * Groundtruth Multi View Stereo reconstructions with Agisoft Metashape
 
-Furthermore, it includes the reconstruction code for the MIMO imaging radar measurements.
+Furthermore, it includes the **reconstruction code for the MIMO imaging radar** measurements.
 
 <img src="assets/viewer.gif" height="555"><img src="assets/viewmode.gif" height="555">
 
@@ -41,7 +41,7 @@ python3 -m pip install setup.py
 * `pyzed` (Stereolabs ZED)
 * `pyrealsense2` (Intel Realsense)
 If you only want to visualize photogrammetry and radar data, you can skip installation of these dependencies. 
-Make sure to adjust the `sensor_in_use` option in your configuration file in this case (see [configuration](#configuration))
+Make sure to adjust the `sensors_in_use` option in your configuration file in this case (see [configuration](#configuration))
 Further Installation instructions about these additional packages is provided below.
 
 
