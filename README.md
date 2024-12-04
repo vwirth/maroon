@@ -36,20 +36,22 @@ cd code/maroon;
 python3 -m pip install setup.py 
 ```
 
-**Note:** To visualize all sensor data, the installation requires several-sensor specific packages:
+**[Optional]:** To visualize all sensor data, the installation requires several sensor-specific packages:
 * `pykinect_azure` (Microsoft Azure Kinect)
 * `pyzed` (Stereolabs ZED)
 * `pyrealsense2` (Intel Realsense)
-Installation instructions are provided below
+If you only want to visualize photogrammetry and radar data, you can skip installation of these dependencies. 
+Make sure to adjust the `sensor_in_use` option in your configuration file in this case (see [configuration](#configuration))
+Further Installation instructions about these additional packages is provided below.
 
 
-#### Pykinect Azure
+#### Pykinect Azure (Optional)
 If you wish to include the Microsoft Kinect, this repository adapts code from Ibai Gorordo's [pyKinectAzure](https://github.com/ibaiGorordo/pyKinectAzure), which is located in `external/pykinect_azure`. To install this package, run:
 ```
 cd external/pykinect_azure;
 python -m pip install setup.py 
 ```
-#### Pyzed (4.2.0)
+#### Pyzed (4.2.0) (Optional)
 Installation instructions are explained [here](https://www.stereolabs.com/docs/app-development/python/install)
 
 Install the following packages
@@ -64,7 +66,7 @@ python get_python_api.py
 ```
 In the installation directory.
 
-#### Pyrealsense2
+#### Pyrealsense2 (Optional)
 The package can be simply installed with
 ```
 python -m pip install pyrealsense2
