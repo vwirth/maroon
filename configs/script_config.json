@@ -1,0 +1,36 @@
+{
+    "use_relative_paths": true,
+    "base_path": "/home/virth/sshfs/2023/maroon",
+    "reconstruction_path": "05_concrete_stone/30",
+    "sensors_in_use": [
+        "kinect",
+        "radar",
+        "photogrammetry",
+        "realsense",
+        "zed"
+    ],
+    "use_empty_space_measurements": false,
+    "mask_erosion": 0,
+    "radar": {
+        "force_redo": false,
+        "use_intrinsic_parameters": true,
+        "amplitude_filter_threshold_dB": 14,
+        "reconstruction_capture_params": {
+            "frequency_low": 72,
+            "frequency_high": 82,
+            "frequency_points": 128
+        },
+        "reconstruction_reco_params": {
+            "xmin": -0.15,
+            "xmax": 0.15,
+            "xsteps": 301,
+            "ymin": -0.15,
+            "ymax": 0.15,
+            "ysteps": 301,
+            "zmin": 0.25,
+            "zmax": 0.4,
+            "zsteps": 201
+        }
+    },
+    "calibration_filename": "alignment.json"
+}
