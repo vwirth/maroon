@@ -46,7 +46,27 @@ Further Installation instructions about these additional packages is provided be
 
 
 #### Pykinect Azure (Optional)
-If you wish to include the Microsoft Kinect, this repository adapts code from Ibai Gorordo's [pyKinectAzure](https://github.com/ibaiGorordo/pyKinectAzure), which is located in `external/pykinect_azure`. To install this package, run:
+If you wish to include the Microsoft Kinect, you need to download the [Microsoft Kinect Azure SDK](https://github.com/microsoft/Azure-Kinect-Sensor-SDK) with version **1.3.0**. 
+Installation instructions for Linux and Windows are provided [here](https://github.com/microsoft/Azure-Kinect-Sensor-SDK/blob/develop/docs/usage.md) - **However, they might not work for your current Linux system (see instructions below)**
+
+As the the installation via the package manager system is discontinued since Ubuntu 18.04, it is advisable to install the SDK from scratch.
+Therefore, make sure to have the following components installed
+```
+sudo apt-get ninja-build
+```
+Then, install **version 1.3.0** of the SDK via:
+```
+git clone https://github.com/microsoft/Azure-Kinect-Sensor-SDK.git
+git checkout v1.3.0
+cd Azure-Kinect-Sensor-SDK
+mkdir build && cd build
+cmake .. -GNinja
+ninja
+sudo ninja install
+```
+After that, you should have two libraries: `libk4a` and `libk4a-dev`
+
+To have a Python wrapper for the kinect SDK, this repository adapts code from Ibai Gorordo's [pyKinectAzure](https://github.com/ibaiGorordo/pyKinectAzure), which is located in `external/pykinect_azure`. To install this package, run:
 ```
 cd external/pykinect_azure;
 python -m pip install setup.py 
