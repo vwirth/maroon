@@ -99,7 +99,7 @@ The MAROON dataset contains the following structure:
 ```bash
 maroon
 |
-|--> <objectname2>
+|--> <objectname1>
     # object-to-sensor distance at 30 cm (from radar's perspective)
     |--> 30
         |--> metadata.json
@@ -354,7 +354,8 @@ A short explanation of all important configuration settings is provided here:
 | `radar:force_redo`                    | By default, the radar dataset loader uses the cached reconstructions within the dataset to load the respective reconstruction volume (`volume`), pointcloud (`xyz`), depth map (`depth`), or amplitude map (`maxproj`). If you explicitely want to trigger the reconstruction algorithms, set this flag to true. |
 | `radar:use_intrinsic_parameters`      | Once a radar reconstruction is done, the hyperparameters are stored in an intrinsic file. These parameters are used to load the cached reconstruction files and - in case the `radar:reconstruction_reco_params` have changed - to check whether reconstruction has to be redone.                                |
 | `radar:amplitude_filter_threshold_dB` | the decibel threshold to filter out background noise and sidelobes such that only valid radar depth values remain.                                                                                                                                                                                               |
-| `radar:reconstruction_capture_params` | The voxel extents as well as the voxel density that are used for the radar reconstruction.                                                                                                                                                                                                                       |
+| `radar:reconstruction_capture_patams` | Configures the frequency steps for the FSCW radar setup |
+| `radar:reconstruction_reco_params` | The voxel extents as well as the voxel density that are used for the radar reconstruction. For example, `xmin` = -0.15, `xmax` = 0.15 and `xsteps` = 301 constructs 301 voxels, with their **voxel centers** in-between [-0.15 m, 0.15 m] (here: with 0.01 m distance to each other)                                                                                                                                                                                                                     |
 | `calibration_filename`                | the name of the calibration file that is used to align the different sensor coordinate systems.                                                                                                                                                                                                                  |
 
 
