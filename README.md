@@ -5,12 +5,14 @@
 
 [![CC BY-NC 4.0][cc-by-nc-image]][cc-by-nc]
 
-### [Project Page 🌐](https://vwirth.github.io/maroon) | [Paper 🗒️](https://arxiv.org/abs/2411.00527) |  [Arxiv 📚](https://arxiv.org/abs/2411.00527) 
+### [Project Page 🌐](https://vwirth.github.io/maroon) | [Paper 🗒️](https://arxiv.org/abs/2411.00527) |  [Arxiv 📚](https://arxiv.org/abs/2411.00527) | [Dataset (Mini) 📁](https://faubox.rrze.uni-erlangen.de/getlink/fi43P9pBvMVCGz5xJSfRRM/maroon_mini.zip)
 
 # 🌰 MAROON Documentation
 
 This is the official code repository accompanying the paper [MAROON](https://arxiv.org/abs/2411.00527).  
-It includes a python-based dataset viewer and provides data preprocessing code for all sensor measurements of:
+Please note that the **full** version of the dataset will be officially released with the publication of its corresponding research paper.
+
+This repository includes a python-based dataset viewer and provides data preprocessing code for all sensor measurements of:
 * Microsoft Kinect Azure
 * Intel Realsense D435i
 * Stereolabs Zed X Mini
@@ -92,7 +94,11 @@ The package can be simply installed with
 python -m pip install pyrealsense2
 ```
 
-## Dataset structure
+## Dataset
+
+Please note that the **full** version of the dataset will be officially released with the publication of its corresponding research paper.
+
+So far, a **mini** version of the dataset for testing purposes can be found at: https://faubox.rrze.uni-erlangen.de/getlink/fi43P9pBvMVCGz5xJSfRRM/maroon_mini.zip
 
 ### Overview
 The MAROON dataset contains the following structure:
