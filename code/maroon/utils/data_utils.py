@@ -12,7 +12,7 @@ import numpy as np
 
 
 def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
-             radar_reconstruction_method="fscw", averaging=1, averaging_factor=1,
+             averaging_factor=1,
              triangulation_threshold=pow(2, 16),
              amplitude_filter_threshold_dB=-1, kinect_space="color",
              use_intrinsic_parameters=False,
@@ -131,7 +131,7 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
 
     elif sensor_type == "realsense":
         from maroon.sensors.realsense_data_loader import RealsenseDataLoader
-        
+
         rs_frame_index = frame_index
 
         realsense_loader = RealsenseDataLoader(data_path)

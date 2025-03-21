@@ -29,6 +29,7 @@ Furthermore, it includes the **reconstruction code for the MIMO imaging radar** 
 * [Dataset Structure](#dataset-structure)
 * [Configuration](#configuration)
 * [Execution](#execution)
+* [Transforming Data Between Sensor Spaces](#transforming-data-between-sensor-spaces)
 
 ## Dependencies
 
@@ -137,7 +138,9 @@ The `metadata.json` file contains metadata about the object capture such as:
     # object labels that were used in GroundedSAM for semi-automatic object segmentation
     "labels": ["sigma"],
     # bounding box parameters (in radar space, in meters) that limit the spatial extents, in which the depth deviation metrics are calculated
-    "mask_bb": {"zmin": 0.23, "zmax": 0.1}
+    "mask_bb": {"zmin": 0.23, "zmax": 0.1},
+    # name of the 'empty' measurement (without any target) of the room setup that was done before capturing the object in front (see explanation for radar data below)
+    "empty_measurement": "01_empty",
 }
 ```
 
@@ -236,6 +239,10 @@ The photogrammetry directory structure looks like this:
     |--> mesh_masked_smoothed.obj + .mtl
     # contains the captured RGB images from each DSLR camera
     |--> rgb
+        |--> <camera-name>.jpg
+        |--> ...
+    # contains additionally captured RGB images of the object, before the speckle pattern was applied (in situ without moving the object in-between)
+    |--> (optional) rgb_nospeckle
         |--> <camera-name>.jpg
         |--> ...
     # contains the semi-automatically annotated segmentation masks and some additional
@@ -376,6 +383,34 @@ The live viewer can be executed with:
 ```
 cd code;
 python main.py
+```
+
+## Transforming Data Between Sensor Spaces
+Transforming 3D data (e.g. a pointcloud or a backprojected depth map) from sensor space `src` to sensor space `dest` can be done as follows:
+```python 
+# set object path, for example:
+object_path = '<path_to_maroon>/maroon/02_cardboard/30'
+calib = {}
+# open the 'alignment.json' file that lies within the object path
+with open(os.path.join(object_path, 'alignment.json'), "r") as f:
+    calib = json.load(f)
+
+# get 'src' dataloader, examples are listed in 'get_data' of maroon/utils/data_utils.py
+# example here for 'src'='radar':
+from maroon.sensors.radar_data_loader import RadarDataLoader
+radar_loader = RadarDataLoader(os.path.join(object_path, "radar_72.0_82.0_128"))
+radar_loader.read_radar_frames()
+
+# get the 0th frame
+radar_points, radar_depth, radar_intensity = radar_loader.get_frame(0)
+# reshape points from (W,H,3) to (W*H, 3)
+radar_points = radar_points.reshape(-1,3)
+
+# transform into 'dest' space, for example 'dest'='realsense'
+import maroon.utils.spatial_alignment as salign
+radar_points_in_realsense_space = salign.transform(
+    radar_points, "radar", "realsense", calib)
+
 ```
 
 # Acknowledgements

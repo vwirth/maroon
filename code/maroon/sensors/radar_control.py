@@ -134,17 +134,17 @@ class RadarControllerBase:
         range_data = None
         with open(os.path.join(meta_dir, "calibration.json"), 'r') as f:
             range_data = json.load(f)
-        self.grid_x_range = np.linspace(range_data[frame_index]["depth"]["bb_min"][0], range_data[frame_index]
-                                        ["depth"]["bb_max"][0], range_data[frame_index]["depth"]["grid_size"][0])
-        self.grid_y_range = np.linspace(range_data[frame_index]["depth"]["bb_min"][1], range_data[frame_index]
-                                        ["depth"]["bb_max"][1], range_data[frame_index]["depth"]["grid_size"][1])
-        self.grid_z_range = np.linspace(range_data[frame_index]["depth"]["bb_min"][2], range_data[frame_index]
-                                        ["depth"]["bb_max"][2], range_data[frame_index]["depth"]["grid_size"][2])
+        self.grid_x_range = np.linspace(range_data[frame_index]["volume"]["bb_min"][0], range_data[frame_index]
+                                        ["volume"]["bb_max"][0], range_data[frame_index]["volume"]["grid_size"][0])
+        self.grid_y_range = np.linspace(range_data[frame_index]["volume"]["bb_min"][1], range_data[frame_index]
+                                        ["volume"]["bb_max"][1], range_data[frame_index]["volume"]["grid_size"][1])
+        self.grid_z_range = np.linspace(range_data[frame_index]["volume"]["bb_min"][2], range_data[frame_index]
+                                        ["volume"]["bb_max"][2], range_data[frame_index]["volume"]["grid_size"][2])
         reco_data = np.asarray(volume.colors).reshape(
             self.grid_x_range.shape[0], self.grid_y_range.shape[0], self.grid_z_range.shape[0], 3)
         reco_data = reco_data * \
-            (range_data[frame_index]["depth"]["max_amplitude"] - range_data[frame_index]["depth"]["min_amplitude"]
-             ) + range_data[frame_index]["depth"]["min_amplitude"]
+            (range_data[frame_index]["volume"]["max_amplitude"] - range_data[frame_index]["volume"]["min_amplitude"]
+             ) + range_data[frame_index]["volume"]["min_amplitude"]
 
         if visualize:
             pixel_x, pixel_y, pixel_z = np.meshgrid(
@@ -230,14 +230,14 @@ class RadarControllerBase:
         with open(intrinsics_file, "w") as f:
             output = {}
             output[frame_index] = {}
-            output[frame_index]["depth"] = {}
-            output[frame_index]["depth"]["min_amplitude"] = min_intensity
-            output[frame_index]["depth"]["max_amplitude"] = max_intensity
-            output[frame_index]["depth"]["bb_min"] = [self.grid_x_range.min().item(
+            output[frame_index]["volume"] = {}
+            output[frame_index]["volume"]["min_amplitude"] = min_intensity
+            output[frame_index]["volume"]["max_amplitude"] = max_intensity
+            output[frame_index]["volume"]["bb_min"] = [self.grid_x_range.min().item(
             ), self.grid_y_range.min().item(), self.grid_z_range.min().item()]
-            output[frame_index]["depth"]["bb_max"] = [self.grid_x_range.max().item(
+            output[frame_index]["volume"]["bb_max"] = [self.grid_x_range.max().item(
             ), self.grid_y_range.max().item(), self.grid_z_range.max().item()]
-            output[frame_index]["depth"]["grid_size"] = [
+            output[frame_index]["volume"]["grid_size"] = [
                 self.grid_x_range.shape[0], self.grid_y_range.shape[0], self.grid_z_range.shape[0]]
 
             output, ret = self.merge_meta_data(

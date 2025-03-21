@@ -1,7 +1,7 @@
 {
     "use_relative_paths": true,
     "base_path": "/home/virth/sshfs/2023/maroon",
-    "reconstruction_path": "05_concrete_stone/30",
+    "reconstruction_path": "02_cardboard/30",
     "sensors_in_use": [
         "kinect",
         "radar",
@@ -29,7 +29,7 @@
             "ysteps": 301,
             "zmin": 0.25,
             "zmax": 0.4,
-            "zsteps": 201
+            "zsteps": 151
         }
     },
     "calibration_filename": "alignment.json"
