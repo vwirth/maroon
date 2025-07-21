@@ -231,11 +231,12 @@ class SensorVisualizer(AppWindow):
             from maroon.sensors.kinect_data_loader import KinectDataLoader
 
             if self.sensor_data["kinect"]["data_space"] == "depth" and (not "space" in self.calib["kinect_calib"] or self.calib["kinect_calib"]["space"] == "color"):
-                
+
                 kinect_loader = KinectDataLoader(
                     self.sensor_data["kinect"]["path"], space=self.sensor_data["kinect"]["data_space"])
                 K = np.array(kinect_loader.get_extrinsics("color", "depth"))
-                K_inv = np.array(kinect_loader.get_extrinsics("depth", "color"))
+                K_inv = np.array(
+                    kinect_loader.get_extrinsics("depth", "color"))
                 for key in self.calib.keys():
                     if "2kinect" in key:
                         M = np.array(self.calib[key]).reshape(4, 4)
@@ -250,7 +251,8 @@ class SensorVisualizer(AppWindow):
             if self.sensor_data["kinect"]["data_space"] == "color" and ("space" in self.calib["kinect_calib"] and self.calib["kinect_calib"]["space"] == "depth"):
                 kinect_loader = KinectDataLoader(
                     self.sensor_data["kinect"]["path"], space=self.sensor_data["kinect"]["data_space"])
-                K_inv = np.array(kinect_loader.get_extrinsics("color", "depth"))
+                K_inv = np.array(
+                    kinect_loader.get_extrinsics("color", "depth"))
                 K = np.array(kinect_loader.get_extrinsics("depth", "color"))
                 for key in self.calib.keys():
                     if "2kinect" in key:
@@ -352,12 +354,9 @@ class SensorVisualizer(AppWindow):
 
     def show_sensor(self, sensor_type, visible, changed_clipping=False, clip_min=None, clip_max=None):
         if not sensor_type in self.sensors_in_use:
-            print("Sensor '{}' is not listed in 'sensor_in_use' option. Ignoring data loading process...".format(sensor_type))
+            print("Sensor '{}' is not listed in 'sensor_in_use' option. Ignoring data loading process...".format(
+                sensor_type))
             return
-        
-        self.sensors_enabled[sensor_type].checked = visible
-        self.sensor_masks[sensor_type].checked = self.sensor_data[sensor_type]["use_mask"]
-        self.sensor_isometric[sensor_type].checked = self.sensor_data[sensor_type]["isometric"]
 
         if visible:
             current_space = self.current_space
@@ -372,7 +371,14 @@ class SensorVisualizer(AppWindow):
             if current_space == "photogrammetry" or (error_space == "photogrammetry" and not self.error_space_is_sensor):
                 return
 
-            self.add_sensor(sensor_type)
+            res = self.add_sensor(sensor_type)
+            if not res:
+                return
+
+            self.sensors_enabled[sensor_type].checked = visible
+            self.sensor_masks[sensor_type].checked = self.sensor_data[sensor_type]["use_mask"]
+            self.sensor_isometric[sensor_type].checked = self.sensor_data[sensor_type]["isometric"]
+
             self.transform_sensor(
                 sensor_type, current_space, isometric=self.sensor_data[sensor_type]["isometric"])
 
@@ -536,6 +542,7 @@ class SensorVisualizer(AppWindow):
                 self.change_geometry_visibility(sensor_type, visible)
                 self.sensor_data[sensor_type]["visible"] = True
         else:
+
             self.change_geometry_visibility(sensor_type, visible)
             if "visible" in self.sensor_data[sensor_type]:
                 self.sensor_data[sensor_type]["visible"] = False
@@ -830,11 +837,16 @@ class SensorVisualizer(AppWindow):
             _, _, dest_depth, _, _, dest_proj, _, _ = du.get_data(
                 common_space, self.sensor_data[common_space]["path"], self.sensor_data[common_space]["index"], self.config,
                 use_mask=False,
-                radar_reconstruction_method=self.radar_reconstruction_method, averaging_factor=self.averaging,
+                averaging_factor=self.averaging,
                 triangulation_threshold=self.triangulation_threshold,
                 amplitude_filter_threshold_dB=self.sensor_data["radar"]["amplitude_filter_threshold_dB"],
                 kinect_space=self.sensor_data["kinect"]["data_space"],
                 use_intrinsic_parameters=self.sensor_data["radar"]["use_intrinsic_parameters"])
+            if dest_depth is None:
+                print("No data found for sensor type '{}' at path '{}' and index {}".format(
+                    common_space, self.sensor_data[common_space]["path"], self.sensor_data[common_space]["index"]))
+                return None
+
             common_depth = dest_depth
             common_proj = dest_proj
         else:
@@ -880,11 +892,15 @@ class SensorVisualizer(AppWindow):
                 sensor_type, self.sensor_data[sensor_type]["path"], self.sensor_data[sensor_type]["index"], self.config,
                 use_mask=self.sensor_data[sensor_type]["use_mask"],
                 manual_mask=gt_mask,
-                radar_reconstruction_method=self.radar_reconstruction_method, averaging_factor=self.averaging,
+                averaging_factor=self.averaging,
                 triangulation_threshold=self.triangulation_threshold,
                 amplitude_filter_threshold_dB=self.sensor_data["radar"]["amplitude_filter_threshold_dB"],
                 kinect_space=self.sensor_data["kinect"]["data_space"],
                 use_intrinsic_parameters=self.sensor_data["radar"]["use_intrinsic_parameters"])
+            if src_points is None:
+                print("No data found for sensor type '{}' at path '{}' and index {}".format(
+                    sensor_type, self.sensor_data[sensor_type]["path"], self.sensor_data[sensor_type]["index"]))
+                return False
 
             if self.sensor_data[sensor_type]["mask_erosion"] > 0 and src_mask is not None:
 
@@ -927,6 +943,8 @@ class SensorVisualizer(AppWindow):
             self.sensor_data[sensor_type]["space"] = sensor_type
             if not "visible" in self.sensor_data[sensor_type]:
                 self.sensor_data[sensor_type]["visible"] = True
+
+        return True
 
     def _update_data(self, changed_clipping=False):
         for sensor_type in self.sensors.keys():

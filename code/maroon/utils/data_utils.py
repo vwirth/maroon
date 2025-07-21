@@ -35,13 +35,17 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
                                        averaging=averaging_factor)
         radar_loader.read_radar_frames()
 
-        radar_points, radar_depth, radar_intensity = radar_loader.get_frame(frame_index, force_redo=config["radar"]["force_redo"],
-                                                                            amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
-                                                                            depth_filter_kernel_size=1,
-                                                                            use_intrinsic_parameters=use_intrinsic_parameters,
-                                                                            save_volume=True,
-                                                                            save_pc=True,
-                                                                            averaging_factor=1)
+        try:
+            radar_points, radar_depth, radar_intensity = radar_loader.get_frame(frame_index, force_redo=config["radar"]["force_redo"],
+                                                                                amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
+                                                                                depth_filter_kernel_size=1,
+                                                                                use_intrinsic_parameters=use_intrinsic_parameters,
+                                                                                save_volume=True,
+                                                                                save_pc=True,
+                                                                                averaging_factor=1)
+        except Exception as e:
+            print(f"Error loading radar data for frame {frame_index}: {e}")
+            return None, None, None, None, None, None, None, []
 
         radar_normal = radar_loader.compute_normal_from_pc(
             radar_points, radar_depth)
@@ -79,8 +83,12 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
 
         kinect_loader = KinectDataLoader(data_path, space=kinect_space)
 
-        kinect_rgb, kinect_depth, kinect_depth_t, kinect_points, kinect_normals = kinect_loader.get_frame(
-            frame_index, use_mask=use_mask,  manual_mask=manual_mask, mask_idx=-1,  undistort=True, averaging_factor=averaging_factor)
+        try:
+            kinect_rgb, kinect_depth, kinect_depth_t, kinect_points, kinect_normals = kinect_loader.get_frame(
+                frame_index, use_mask=use_mask,  manual_mask=manual_mask, mask_idx=-1,  undistort=True, averaging_factor=averaging_factor)
+        except Exception as e:
+            print(f"Error loading Kinect data for frame {frame_index}: {e}")
+            return None, None, None, None, None, None, None, []
 
         kinect_ir = kinect_loader.get_ir_image(
             frame_index=frame_index, use_mask=use_mask, manual_mask=manual_mask, undistort=True)
@@ -113,12 +121,17 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
     elif sensor_type == "photogrammetry":
         from maroon.sensors.camera_data_loader import CameraDataLoader
 
-        photo_loader = CameraDataLoader(data_path)
-        mesh = photo_loader.get_mesh(
-            do_smoothing=True, use_mask=use_mask)
-        photo_loader.load_images()
-        photo_loader.load_calibration()
-        _, depth, _ = photo_loader.get_image_data_from_idx(0)
+        try:
+            photo_loader = CameraDataLoader(data_path)
+            mesh = photo_loader.get_mesh(
+                do_smoothing=True, use_mask=use_mask)
+            photo_loader.load_images()
+            photo_loader.load_calibration()
+            _, depth, _ = photo_loader.get_image_data_from_idx(0)
+        except Exception as e:
+            print(
+                f"Error loading photogrammetry data for frame {frame_index}: {e}")
+            return None, None, None, None, None, None, None, []
 
         points = np.array(mesh.vertices)
         rgb = np.array(mesh.vertex_colors)
@@ -134,9 +147,14 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
 
         rs_frame_index = frame_index
 
-        realsense_loader = RealsenseDataLoader(data_path)
-        realsense_rgb, realsense_depth, realsense_points, realsense_normal = realsense_loader.get_frame(
-            rs_frame_index, use_mask=use_mask, mask_idx=-1, averaging_factor=averaging_factor, manual_mask=manual_mask)
+        try:
+            realsense_loader = RealsenseDataLoader(data_path)
+            realsense_rgb, realsense_depth, realsense_points, realsense_normal = realsense_loader.get_frame(
+                rs_frame_index, use_mask=use_mask, mask_idx=-1, averaging_factor=averaging_factor, manual_mask=manual_mask)
+        except Exception as e:
+            print(f"Error loading Realsense data for frame {frame_index}: {e}")
+            return None, None, None, None, None, None, None, []
+
         mesh = pu.triangulate_image_pointcloud(
             realsense_points, threshold=triangulation_threshold*1000.0)
 
@@ -160,9 +178,14 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
         from maroon.sensors.zed_data_loader import ZEDDataLoader
         zed_frame_index = frame_index
 
-        zed_loader = ZEDDataLoader(data_path)
-        (zed_rgb, zed_depth, zed_points, zed_normal), _ = zed_loader.get_frame(
-            zed_frame_index, use_mask=use_mask, mask_idx=-1, averaging_factor=averaging_factor, manual_mask=manual_mask)
+        try:
+            zed_loader = ZEDDataLoader(data_path)
+            (zed_rgb, zed_depth, zed_points, zed_normal), _ = zed_loader.get_frame(
+                zed_frame_index, use_mask=use_mask, mask_idx=-1, averaging_factor=averaging_factor, manual_mask=manual_mask)
+        except Exception as e:
+            print(f"Error loading ZED data for frame {frame_index}: {e}")
+            return None, None, None, None, None, None, None, []
+
         mesh = pu.triangulate_image_pointcloud(
             zed_points, threshold=triangulation_threshold*1000.0)
 
