@@ -9,19 +9,26 @@ import os
 import json
 from maroon.utils.visualization_types import *
 
-use_masks = False
-use_mask_sensors = False
-use_dest_mask = False
-# triangulation_threshold = pow(2, 16)
+
+# maximum error that is displayed in color map
+max_error = 0.05  # 0.01
+# which error type to use, either 'projective' or 'chamfer' error
+error_type = ERROR_TYPES["projective"]
+# whether to apply segmentation mask to the source point cloud during error calculation
+use_masks = True
+# whether to apply segmentation mask to the destination point cloud during error calculation
+use_dest_mask = True
+# depth threshold for image-based triangulation
 triangulation_threshold = 0.01
-outlier_threshold = 0.01
+# how many frames to average for calculating a depth map
 averaging_factor = 1
+# which frame index to reconstruct, for all sensors
 frame_index = -1
-dot_thresh = -10
-averaging = 1
+# used to construct source mask, with this setting right now it is practically ignored
+dot_thresh = -10.0
 
 
-def visualize_alignment(config, num_frames=1,
+def visualize_alignment(config,
                         error_type=ERROR_TYPES["projective"],
                         max_error=0.01,
                         offline=False):
@@ -154,41 +161,18 @@ def visualize_alignment(config, num_frames=1,
     o3d.visualization.gui.Application.instance.run()
 
 
-def interactive(config, num_frames, max_error, error_type):
+def interactive(config, max_error, error_type):
 
     visualize_alignment(config,
-                        num_frames=num_frames,
                         error_type=error_type,
                         max_error=max_error)
 
 
 def main():
-    global use_masks
-    global use_dest_mask
-    global triangulation_threshold
-    global dot_thresh
-    global averaging
-    global averaging_factor
-    global outlier_threshold
-    global frame_index
-
-    num_frames = 0
-    max_error = 0.05  # 0.01
-    error_type = ERROR_TYPES["projective"]
 
     filename = "script_config"
 
-    use_masks = True
-    use_dest_mask = True
-    triangulation_threshold = 0.01
-    outlier_threshold = 0.01
-    averaging_factor = 1
-    frame_index = -1
-    dot_thresh = -10.0
-    averaging = 1
-
     project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    print("project_path: ", project_path)
 
     config_path = os.path.join(project_path, "configs", filename+".json")
     assert os.path.exists(
@@ -196,7 +180,7 @@ def main():
     with open(config_path) as f:
         config = json.load(f)
 
-    interactive(config, num_frames,
+    interactive(config,
                 max_error, error_type)
 
 
