@@ -79,23 +79,23 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
         redo = frequency_indices is not None or rx_antenna_indices is not None or tx_antenna_indices is not None or radar_reconstruction_method == "fsk"
         redo = redo or config["radar"]["force_redo"]
 
-        # try:
-        radar_points, radar_depth, radar_intensity = radar_loader.get_frame(frame_index, force_redo=redo,
-                                                                            amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
-                                                                            depth_filter_kernel_size=1,
-                                                                            use_intrinsic_parameters=use_intrinsic_parameters,
-                                                                            save_volume=save,
-                                                                            save_pc=save,
-                                                                            save_depth=save,
-                                                                            save_amplitude=save,
-                                                                            averaging_factor=1,
-                                                                            frequency_indices=frequency_indices,
-                                                                            rx_antenna_indices=rx_antenna_indices,
-                                                                            tx_antenna_indices=tx_antenna_indices,
-                                                                            last_z_guess=last_z_guess)
-        # except Exception as e:
-        #     print(f"Error loading radar data for frame {frame_index}: {e}")
-        #     return None, None, None, None, None, None, None, []
+        try:
+            radar_points, radar_depth, radar_intensity = radar_loader.get_frame(frame_index, force_redo=redo,
+                                                                                amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
+                                                                                depth_filter_kernel_size=1,
+                                                                                use_intrinsic_parameters=use_intrinsic_parameters,
+                                                                                save_volume=save,
+                                                                                save_pc=save,
+                                                                                save_depth=save,
+                                                                                save_amplitude=save,
+                                                                                averaging_factor=1,
+                                                                                frequency_indices=frequency_indices,
+                                                                                rx_antenna_indices=rx_antenna_indices,
+                                                                                tx_antenna_indices=tx_antenna_indices,
+                                                                                last_z_guess=last_z_guess)
+        except Exception as e:
+            print(f"Error loading radar data for frame {frame_index}: {e}")
+            return None, None, None, None, None, None, None, []
 
         radar_normal = radar_loader.compute_normal_from_pc(
             radar_points, radar_depth)
