@@ -9,6 +9,7 @@ import os
 import json
 import cv2
 import numpy as np
+from scipy.spatial import Delaunay
 
 
 def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
@@ -16,7 +17,12 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
              triangulation_threshold=pow(2, 16),
              amplitude_filter_threshold_dB=-1, kinect_space="color",
              use_intrinsic_parameters=False,
-             manual_mask=None):
+             manual_mask=None,
+             radar_reconstruction_method="fscw",
+             prior_mesh=None,
+             frequency_indices=None,
+             rx_antenna_indices=None,
+             tx_antenna_indices=None):
     points = None
     depth = None
     rgb = None
@@ -31,21 +37,65 @@ def get_data(sensor_type, data_path, frame_index, config, use_mask=False,
         use_empty_space_measurements = config["use_empty_space_measurements"]
         radar_loader = RadarDataLoader(data_path, **config["radar"]["reconstruction_capture_params"],
                                        **config["radar"]["reconstruction_reco_params"],
+                                       reconstruction_method=radar_reconstruction_method,
                                        use_empty_space_measurements=use_empty_space_measurements,
                                        averaging=averaging_factor)
         radar_loader.read_radar_frames()
 
-        try:
-            radar_points, radar_depth, radar_intensity = radar_loader.get_frame(frame_index, force_redo=config["radar"]["force_redo"],
-                                                                                amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
-                                                                                depth_filter_kernel_size=1,
-                                                                                use_intrinsic_parameters=use_intrinsic_parameters,
-                                                                                save_volume=True,
-                                                                                save_pc=True,
-                                                                                averaging_factor=1)
-        except Exception as e:
-            print(f"Error loading radar data for frame {frame_index}: {e}")
-            return None, None, None, None, None, None, None, []
+        last_z_guess = None
+        if prior_mesh is not None and radar_reconstruction_method == "fsk":
+            proj = radar_loader.get_intrinsics(
+                frame_index)
+
+            height = radar_loader.ysteps
+            width = radar_loader.xsteps
+
+            # project interpolated prior points onto radar's imaginary sensor grid
+            # image grid may still contain holes afterwards as
+            # the grid-based triangulation method avoids large triangles
+            # with huge depth differences
+            _, _, points_mapped, mask_full_holes = pu.project_interpolate(
+                prior_mesh[0], prior_mesh[1], proj, height, width, src_color_attribute=np.ones((prior_mesh[0].shape[0], 1)))
+
+            # take only depth value
+            last_z_guess = points_mapped[:, :, 2]
+            nonzero_pixels = np.argwhere(
+                points_mapped.reshape(height, width, 3)[:, :, 2] != 0).reshape(-1, 2)[:, ::-1]
+            # use delaunay triangulation on pixels to fill holes where optical sensor returned zero values
+            triangles = Delaunay(nonzero_pixels).simplices
+            points_mapped = points_mapped[points_mapped[:,
+                                                        :, 2] != 0].reshape(-1, 3)
+
+            # project triangulated pixels again onto image grid to get hole-free depth map
+            _, _, points_mapped, mask_full_filled = pu.project_interpolate(
+                points_mapped, triangles, proj, height, width, src_color_attribute=np.ones((points_mapped.shape[0], 1)))
+
+            last_z_guess_filled = points_mapped[:, :, 2]
+            last_z_guess = last_z_guess_filled
+
+        # avoid temporary caching of ablation experiments
+        save = frequency_indices is None and rx_antenna_indices is None and tx_antenna_indices is None and radar_reconstruction_method == "fscw"
+
+        redo = frequency_indices is not None or rx_antenna_indices is not None or tx_antenna_indices is not None or radar_reconstruction_method == "fsk"
+        redo = redo or config["radar"]["force_redo"]
+
+        # try:
+        radar_points, radar_depth, radar_intensity = radar_loader.get_frame(frame_index, force_redo=redo,
+                                                                            amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
+                                                                            depth_filter_kernel_size=1,
+                                                                            use_intrinsic_parameters=use_intrinsic_parameters,
+                                                                            save_volume=save,
+                                                                            save_pc=save,
+                                                                            save_depth=save,
+                                                                            save_amplitude=save,
+                                                                            averaging_factor=1,
+                                                                            frequency_indices=frequency_indices,
+                                                                            rx_antenna_indices=rx_antenna_indices,
+                                                                            tx_antenna_indices=tx_antenna_indices,
+                                                                            last_z_guess=last_z_guess)
+        # except Exception as e:
+        #     print(f"Error loading radar data for frame {frame_index}: {e}")
+        #     return None, None, None, None, None, None, None, []
 
         radar_normal = radar_loader.compute_normal_from_pc(
             radar_points, radar_depth)

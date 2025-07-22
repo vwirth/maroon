@@ -185,7 +185,7 @@ class SensorVisualizer(AppWindow):
         self.vis_type = "Color"
 
     def initialize_sensors(self, sensor_data, sensor_in_use, config, calib, base_path="",
-                           radar_reconstruction_method="fscw", averaging=1,
+                           averaging=1,
                            triangulation_threshold=0.01,
                            error_type=ERROR_TYPES["chamfer"], use_dest_mask=False,
                            dot_thresh=0.8, max_error=0.01, mask_bbmin=[None, None, None], mask_bbmax=[None, None, None]):
@@ -193,7 +193,6 @@ class SensorVisualizer(AppWindow):
         self.sensors_in_use = sensor_in_use
         self.config = config
         self.calib = calib
-        self.radar_reconstruction_method = radar_reconstruction_method
         self.averaging = averaging
         self.triangulation_threshold = triangulation_threshold
         self.error_type = error_type
@@ -841,7 +840,11 @@ class SensorVisualizer(AppWindow):
                 triangulation_threshold=self.triangulation_threshold,
                 amplitude_filter_threshold_dB=self.sensor_data["radar"]["amplitude_filter_threshold_dB"],
                 kinect_space=self.sensor_data["kinect"]["data_space"],
-                use_intrinsic_parameters=self.sensor_data["radar"]["use_intrinsic_parameters"])
+                use_intrinsic_parameters=self.sensor_data["radar"]["use_intrinsic_parameters"],
+                radar_reconstruction_method=self.sensor_data["radar"]["reconstruction_method"],
+                frequency_indices=self.sensor_data["radar"]["frequency_indices"],
+                rx_antenna_indices=self.sensor_data["radar"]["rx_antenna_indices"],
+                tx_antenna_indices=self.sensor_data["radar"]["tx_antenna_indices"])
             if dest_depth is None:
                 print("No data found for sensor type '{}' at path '{}' and index {}".format(
                     common_space, self.sensor_data[common_space]["path"], self.sensor_data[common_space]["index"]))
@@ -888,6 +891,36 @@ class SensorVisualizer(AppWindow):
             if sensor_type != "photogrammetry" and ("use_gt_mask" in self.sensor_data[sensor_type] and self.sensor_data[sensor_type]["use_gt_mask"]):
                 gt_mask = self.compute_gt_mask(sensor_type)
 
+            prior_mesh = None
+            if sensor_type == "radar" and self.sensor_data["radar"]["use_prior"]:
+                optical_sensor = self.sensor_data["radar"]["prior_depth_sensor"]
+                if not optical_sensor in self.sensors or not optical_sensor in self.sensors[optical_sensor]:
+                    self.add_sensor(optical_sensor)
+
+                if optical_sensor != "photogrammetry":
+                    optical_points = self.sensors[optical_sensor][optical_sensor]["points"]
+                    mask = self.sensors[optical_sensor][optical_sensor]["mask"]
+                    w = self.sensors[optical_sensor][optical_sensor]["width"]
+                    h = self.sensors[optical_sensor][optical_sensor]["height"]
+
+                    # grid-based triangulation -> necessary to have a hole-free projection onto the radar's imaginary sensor grid
+                    mesh = pu.triangulate_image_pointcloud(
+                        optical_points.reshape(h, w, 3), threshold=10)
+                    triangles = mesh[1]
+                    optical_points = mesh[0].copy().reshape(-1, 3)
+
+                    # transform into radar space
+                    optical_points = salign.transform(
+                        optical_points, optical_sensor, "radar", self.calib)
+
+                    prior_mesh = (optical_points.copy(),
+                                  triangles, mask.reshape(-1))
+                else:
+                    optical_points = salign.transform(
+                        self.sensors[optical_sensor][optical_sensor]["mesh_points"], optical_sensor, "radar", self.calib)
+                    prior_mesh = (optical_points.copy(),
+                                  self.sensors[optical_sensor][optical_sensor]["indices"])
+
             src_points, src_rgb, src_depth, src_mask, src_normals, src_proj, src_mesh, src_aux = du.get_data(
                 sensor_type, self.sensor_data[sensor_type]["path"], self.sensor_data[sensor_type]["index"], self.config,
                 use_mask=self.sensor_data[sensor_type]["use_mask"],
@@ -896,7 +929,12 @@ class SensorVisualizer(AppWindow):
                 triangulation_threshold=self.triangulation_threshold,
                 amplitude_filter_threshold_dB=self.sensor_data["radar"]["amplitude_filter_threshold_dB"],
                 kinect_space=self.sensor_data["kinect"]["data_space"],
-                use_intrinsic_parameters=self.sensor_data["radar"]["use_intrinsic_parameters"])
+                use_intrinsic_parameters=self.sensor_data["radar"]["use_intrinsic_parameters"],
+                radar_reconstruction_method=self.sensor_data["radar"]["reconstruction_method"],
+                prior_mesh=prior_mesh,
+                frequency_indices=self.sensor_data["radar"]["frequency_indices"],
+                rx_antenna_indices=self.sensor_data["radar"]["rx_antenna_indices"],
+                tx_antenna_indices=self.sensor_data["radar"]["tx_antenna_indices"])
             if src_points is None:
                 print("No data found for sensor type '{}' at path '{}' and index {}".format(
                     sensor_type, self.sensor_data[sensor_type]["path"], self.sensor_data[sensor_type]["index"]))

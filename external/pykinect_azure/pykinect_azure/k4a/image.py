@@ -72,21 +72,17 @@ class Image:
     def size(self):
         return self.get_size()
 
-    # Vanessa: Added method
     def get_device_timestamp_usec(self):
         return _k4a.k4a_image_get_device_timestamp_usec(self._handle)
 
-    # Vanessa: Added method
     def get_system_timestamp_nsec(self):
         return _k4a.k4a_image_get_system_timestamp_nsec(self._handle)
 
-    # Vanessa: Added method
     def get_system_timestamp_datetime(self):
         timestamp = _k4a.k4a_image_get_system_timestamp_nsec(self._handle)
         timestamp_sec = (timestamp * 1.0e-9)
         return datetime.fromtimestamp(timestamp_sec)
 
-    # Vanessa: Added method
     def get_device_timestamp_datetime(self):
         timestamp = _k4a.k4a_image_get_device_timestamp_usec(self._handle)
         timestamp_sec = (timestamp * 1.0e-6)

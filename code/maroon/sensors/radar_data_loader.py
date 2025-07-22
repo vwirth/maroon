@@ -3,10 +3,11 @@ import os
 import numpy as np
 import cv2
 
-from maroon.sensors.radar_control import RadarControllerFSCW
+from maroon.sensors.radar_control import RadarControllerFSCW, RadarControllerFSK
 import time
 import math
 import open3d as o3d
+import matplotlib
 
 
 class RadarDataLoader:
@@ -23,6 +24,7 @@ class RadarDataLoader:
                  zmin=0.2,
                  zmax=0.4,
                  zsteps=50,
+                 reconstruction_method="fscw",
                  use_empty_space_measurements=False,
                  averaging=1):
         self.data_path = radar_data_path
@@ -38,10 +40,17 @@ class RadarDataLoader:
         self.zsteps = zsteps
         self.num_frames = 0
 
-        self.radar_client = RadarControllerFSCW(frequency_low_ghz=frequency_low,
-                                                frequency_high_ghz=frequency_high,
-                                                frequency_points=frequency_points,
-                                                averaging=averaging)
+        if (reconstruction_method == "fscw"):
+            self.radar_client = RadarControllerFSCW(frequency_low_ghz=frequency_low,
+                                                    frequency_high_ghz=frequency_high,
+                                                    frequency_points=frequency_points,
+                                                    averaging=averaging)
+        elif (reconstruction_method == "fsk"):
+            self.radar_client = RadarControllerFSK(frequency_low_ghz=frequency_low,
+                                                   frequency_high_ghz=frequency_high,
+                                                   frequency_points=frequency_points,
+
+                                                   averaging=averaging)
 
         self.use_empty_space_measurements = use_empty_space_measurements
         # cache last reconstruction results
@@ -127,24 +136,26 @@ class RadarDataLoader:
             with open(os.path.join(self.data_path,  "calibration.json"), 'r') as f:
                 intr_data = json.load(f)
 
+            if "volume" in intr_data[frame_index_str]:
+                bb_min = intr_data[frame_index_str]["volume"]["bb_min"]
+                bb_max = intr_data[frame_index_str]["volume"]["bb_max"]
+                grid_size = intr_data[frame_index_str]["volume"]["grid_size"]
+                grid_size = [float(g-1) for g in grid_size]
+                intrinsics = self.radar_client.get_intrinsics(grid_size=grid_size,
+                                                              bb_min=bb_min,
+                                                              bb_max=bb_max)
+            elif "depth" in intr_data[frame_index_str] and "bb_min" in intr_data[frame_index_str]["depth"]:
+                bb_min = intr_data[frame_index_str]["depth"]["bb_min"]
+                bb_max = intr_data[frame_index_str]["depth"]["bb_max"]
+                grid_size = intr_data[frame_index_str]["depth"]["grid_size"]
+                grid_size = [float(g-1) for g in grid_size]
+                intrinsics = self.radar_client.get_intrinsics(grid_size=grid_size,
+                                                              bb_min=bb_min,
+                                                              bb_max=bb_max)
+
             if "depth" in intr_data[frame_index_str]:
                 if "transform" in intr_data[frame_index_str]["depth"]:
                     del intr_data[frame_index_str]["depth"]["transform"]
-                    bb_min = intr_data[frame_index_str]["volume"]["bb_min"]
-                    bb_max = intr_data[frame_index_str]["volume"]["bb_max"]
-                    grid_size = intr_data[frame_index_str]["volume"]["grid_size"]
-                    grid_size = [float(g-1) for g in grid_size]
-
-                    intrinsics = np.eye(4)
-                    intrinsics[0, 0] = grid_size[0] / (bb_max[0] - bb_min[0])
-                    intrinsics[0, 3] = bb_min[0] * \
-                        grid_size[0] / (bb_min[0] - bb_max[0])
-                    intrinsics[1, 1] = grid_size[1] / (bb_min[1] - bb_max[1])
-                    intrinsics[1, 3] = bb_min[1]*grid_size[1] / \
-                        (bb_max[1] - bb_min[1]) + grid_size[1]
-                    # from meter to millieter
-                    intrinsics[2, 2] = 1000.0
-
                     intr_data[frame_index_str]["depth"]["intrinsics"] = intrinsics.tolist()
 
                     if os.path.exists(os.path.join(self.data_path, "depth", frame_index_str + ".png")):
@@ -157,9 +168,14 @@ class RadarDataLoader:
                     with open(os.path.join(self.data_path,  "calibration.json"), 'w') as f:
                         json.dump(intr_data, f)
 
-                elif "intrinsics" in intr_data[frame_index_str]["depth"]:
-                    intrinsics = np.array(
-                        intr_data[frame_index_str]["depth"]["intrinsics"]).reshape(4, 4)
+        if intrinsics is None:
+            print("Warning: no intrinsics found for frame: {}, using config parameters".format(
+                frame_index_str))
+
+            intrinsics = self.radar_client.get_intrinsics(grid_size=(self.xsteps-1, self.ysteps-1),
+                                                          bb_min=(
+                self.xmin, self.ymin),
+                bb_max=(self.xmax, self.ymax))
 
         return intrinsics
 
@@ -228,314 +244,6 @@ class RadarDataLoader:
         rec_data_max = np.abs(reco)
 
         return rec_data_max.reshape(-1, 1)
-
-    def reconstruct_positions_noaggregate(self, reco_positions, frame_index=0):
-        raw_data_cal = self.radar_frames[frame_index]
-        tx_positions = self.radar_client.Tx[1:95]
-        rx_positions = self.radar_client.Rx[1:95]
-        reco_data = raw_data_cal['xr'][1:95, 1:95, :]
-        reco_freq = raw_data_cal['fvec'][:]
-
-        zero_indices = np.stack(np.nonzero(np.all(reco_data == 0, axis=-1)), axis=0).reshape(
-            2, -1).transpose(1, 0)
-        valid_antennas = np.logical_not(np.all(reco_data == 0, axis=-1))
-        # print("zero_indices: ")
-        # for p in zero_indices:
-        #     print(p)
-
-        valid = reco_positions[:, 2] != 0
-        num_tx = 94
-        view_in = tx_positions.reshape(
-            1, -1, 3) - reco_positions.copy()[:, None, :]
-        in_length = np.zeros((view_in.shape[0], view_in.shape[1]))
-        in_length[valid] = np.linalg.norm(
-            view_in[valid], axis=-1).reshape(-1, num_tx)
-        # view_in[valid] = view_in[valid] / \
-        #     np.linalg.norm(view_in[valid], axis=-1)[:, :, None]
-        # # view_in = view_in.reshape(-1, 3)
-        # view_in = np.matmul(
-        #     view_in[:, :, None, :], to_local.transpose(0, 2, 1)[:, None, :, :])[:, :, 0, :]
-        # _, polar_in = view_to_spherical_polar(view_in.reshape(-1, 3))
-        # polar_in = polar_in.reshape(-1, num_tx, 2)
-
-        view_out = rx_positions.reshape(
-            1, -1, 3) - reco_positions.copy()[:, None, :]
-        out_length = np.zeros((view_out.shape[0], view_out.shape[1]))
-        out_length[valid] = np.linalg.norm(
-            view_out[valid], axis=-1).reshape(-1, num_tx)
-        # view_out[valid] = view_out[valid] / \
-        #     np.linalg.norm(view_out[valid], axis=-1)[:, :, None]
-        # view_out = np.matmul(
-        #     view_out[:, :, None, :], to_local.transpose(0, 2, 1)[:, None, :, :])[:, :, 0, :]
-        # _, polar_out = view_to_spherical_polar(view_out.reshape(-1, 3))
-        # polar_out = polar_out.reshape(-1, num_tx, 2)
-
-        polar_index_mesh = np.stack(
-            list(np.meshgrid(np.arange(0, num_tx, 1), np.arange(0, num_tx, 1))), axis=-1).reshape(-1, 2)
-
-        length_mesh = np.stack(
-            [out_length[:, polar_index_mesh[:, 1]], in_length[:, polar_index_mesh[:, 0]]], axis=-1)
-        length_mesh = np.sum(length_mesh, axis=-1)
-
-        max_length = np.max(length_mesh, axis=-1)
-        min_length = np.min(length_mesh, axis=-1)
-
-        length_mesh[max_length > 0] = ((length_mesh[max_length > 0] - min_length[max_length > 0, None]) /
-                                       (max_length[max_length > 0, None] - min_length[max_length > 0, None]))
-        length_mesh[max_length > 0] = 1 - length_mesh[max_length > 0]
-
-        length_mesh = length_mesh.reshape(-1, 94, 94)
-        length_mesh[:, np.logical_not(valid_antennas)] = 0
-
-        self.radar_client.initialize_reconstruction(
-            tx_positions, rx_positions)
-
-        num_pts = 20000
-        reco = []
-
-        for start in np.arange(0, reco_positions.shape[0], num_pts):
-            r = self.radar_client.reconstruct_custom_positions_noaggregate(
-                reco_positions[start:(start+num_pts)], reco_data, reco_freq, use_normal_weights=False)
-            reco.append(r)
-        # num_pts x 94 x 94
-
-        reco = np.concatenate(reco, axis=0)
-        return reco, valid_antennas, length_mesh
-        # reco_sum = np.abs(np.sum((reco), axis=(-1, -2)) / (94 * 94))
-        # return reco_sum[:, None]
-
-       # return np.abs(reco_sum)[:, None]
-
-    def reconstruct_positions_hypotheses(self, reco_positions, frame_index=0):
-        raw_data_cal = self.radar_frames[frame_index]
-        tx_positions = self.radar_client.Tx[1:95]
-        rx_positions = self.radar_client.Rx[1:95]
-        reco_data = raw_data_cal['xr'][1:95, 1:95, :]
-        reco_freq = raw_data_cal['fvec'][:]
-
-        zero_indices = np.stack(np.nonzero(np.all(reco_data == 0, axis=-1)), axis=0).reshape(
-            2, -1).transpose(1, 0)
-        valid_antennas = np.logical_not(np.all(reco_data == 0, axis=-1))
-        # print("zero_indices: ")
-        # for p in zero_indices:
-        #     print(p)
-
-        self.radar_client.initialize_reconstruction(
-            tx_positions, rx_positions)
-
-        num_pts = 20000
-        reco = []
-
-        for start in np.arange(0, reco_positions.shape[0], num_pts):
-            r = self.radar_client.reconstruct_custom_positions_hypotheses(
-                reco_positions[start:(start+num_pts)], reco_data, reco_freq, use_normal_weights=False)
-            reco.append(r)
-
-        reco = np.concatenate(reco, axis=0)
-        return np.abs(reco), valid_antennas
-        # reco_sum = np.abs(np.sum((reco), axis=(-1, -2)) / (94 * 94))
-        # return reco_sum[:, None]
-
-       # return np.abs(reco_sum)[:, None]
-
-    def reconstruct_positions_signal(self, reco_positions, frame_index=0):
-        raw_data_cal = self.radar_frames[frame_index]
-        tx_positions = self.radar_client.Tx[1:95]
-        rx_positions = self.radar_client.Rx[1:95]
-        reco_data = raw_data_cal['xr'][1:95, 1:95, :]
-        reco_freq = raw_data_cal['fvec'][:]
-
-        zero_indices = np.stack(np.nonzero(np.all(reco_data == 0, axis=-1)), axis=0).reshape(
-            2, -1).transpose(1, 0)
-        valid_antennas = np.logical_not(np.all(reco_data == 0, axis=-1))
-        # print("zero_indices: ")
-        # for p in zero_indices:
-        #     print(p)
-
-        self.radar_client.initialize_reconstruction(
-            tx_positions, rx_positions)
-
-        num_pts = 20000
-        reco = []
-
-        for start in np.arange(0, reco_positions.shape[0], num_pts):
-            r = self.radar_client.reconstruct_custom_positions_signal(
-                reco_positions[start:(start+num_pts)], reco_data, reco_freq, use_normal_weights=False)
-            reco.append(r)
-
-        reco = np.concatenate(reco, axis=0)
-        return np.abs(reco), valid_antennas
-        # reco_sum = np.abs(np.sum((reco), axis=(-1, -2)) / (94 * 94))
-        # return reco_sum[:, None]
-
-       # return np.abs(reco_sum)[:, None]
-
-    def get_frame_coarse_to_fine(self,
-                                 frame_index=0,
-                                 xmin_c=-0.25,
-                                 xmax_c=0.25,
-                                 xsteps_c=100,
-                                 ymin_c=-0.25,
-                                 ymax_c=0.25,
-                                 ysteps_c=100,
-                                 zmin_c=0.25,
-                                 zmax_c=0.5,
-                                 zsteps_c=50,
-                                 num_frames_coarse=1,
-                                 amplitude_filter_threshold_dB=15,
-                                 depth_filter_kernel_size=1,
-                                 force_redo=False,
-                                 save_depth=True,
-                                 save_pc=True,
-                                 save_amplitude=True,
-                                 save_volume=False,
-                                 precise=True):
-        raw_data_cal = self.radar_frames[frame_index]
-        tx_positions = self.radar_client.Tx[1:95]
-        rx_positions = self.radar_client.Rx[1:95]
-
-        frame_index_str = str(frame_index).zfill(6)
-        intr_data = None
-        if os.path.exists(os.path.join(self.data_path,  "calibration.json")):
-            with open(os.path.join(self.data_path,  "calibration.json")) as f:
-                intr_data = json.load(f)
-
-        if (intr_data is None or (not frame_index_str in intr_data) or force_redo):
-            print("Reconstruct coarse to fine....")
-
-            holographic_x = np.linspace(xmin_c,
-                                        xmax_c, xsteps_c)
-            holographic_y = np.linspace(ymin_c,
-                                        ymax_c, ysteps_c)
-            holographic_z = np.linspace(zmin_c,
-                                        zmax_c, zsteps_c)
-
-            gap_x = holographic_x[1] - holographic_x[0]
-            gap_y = holographic_y[1] - holographic_y[0]
-            gap_z = holographic_z[1] - holographic_z[0]
-
-            rec_config = {
-                "xmin": xmin_c,
-                "xmax": xmax_c,
-                "xsteps": xsteps_c,
-                "ymin": ymin_c,
-                "ymax": ymax_c,
-                "ysteps": ysteps_c,
-                "zmin": zmin_c,
-                "zmax": zmax_c,
-                "zsteps": zsteps_c
-            }
-            self.set_config(**rec_config)
-
-            if num_frames_coarse <= 1:
-                radar_points, radar_depth, radar_intensity = self.get_frame(frame_index, force_redo=force_redo,
-                                                                            use_intrinsic_parameters=not force_redo,
-                                                                            amplitude_filter_threshold_dB=20,
-                                                                            save_depth=False,
-                                                                            save_pc=False,
-                                                                            save_amplitude=False,
-                                                                            save_volume=False)
-
-                min_x = np.round(
-                    radar_points[radar_points[:, :, 2] > 0, 0].min(), 2)
-                max_x = np.round(
-                    radar_points[radar_points[:, :, 2] > 0, 0].max(), 2)
-                min_y = np.round(
-                    radar_points[radar_points[:, :, 2] > 0, 1].min(), 2)
-                max_y = np.round(
-                    radar_points[radar_points[:, :, 2] > 0, 1].max(), 2)
-                min_z = np.round(
-                    radar_points[radar_points[:, :, 2] > 0, 2].min(), 2)
-                max_z = np.round(
-                    radar_points[radar_points[:, :, 2] > 0, 2].max(), 2)
-
-            else:
-                min_x = math.inf
-                min_y = math.inf
-                min_z = math.inf
-
-                max_x = 0
-                max_y = 0
-                max_z = 0
-
-                for i in range(frame_index, min(frame_index + num_frames_coarse, self.num_frames)):
-                    radar_points, _, _ = self.get_frame(i, force_redo=force_redo,
-                                                        use_intrinsic_parameters=not force_redo,
-                                                        amplitude_filter_threshold_dB=20,
-                                                        save_depth=False,
-                                                        save_pc=False,
-                                                        save_amplitude=False,
-                                                        save_volume=False)
-                    min_x = min(min_x, np.round(
-                        radar_points[radar_points[:, :, 2] > 0, 0].min(), 2))
-                    max_x = max(max_x, np.round(
-                        radar_points[radar_points[:, :, 2] > 0, 0].max(), 2))
-                    min_y = min(min_y, np.round(
-                        radar_points[radar_points[:, :, 2] > 0, 1].min(), 2))
-                    max_y = max(max_y, np.round(
-                        radar_points[radar_points[:, :, 2] > 0, 1].max(), 2))
-                    min_z = min(min_z, np.round(
-                        radar_points[radar_points[:, :, 2] > 0, 2].min(), 2))
-                    max_z = max(max_z, np.round(
-                        radar_points[radar_points[:, :, 2] > 0, 2].max(), 2))
-
-            min_x = min_x - gap_x
-            max_x = max_x + gap_x
-            min_y = min_y - gap_y
-            max_y = max_y + gap_y
-            min_z = min_z - gap_z
-            max_z = max_z + gap_z
-
-            if (precise):
-                steps_x = min(int(np.ceil((max_x - min_x) / 0.001)), 200)
-                steps_y = min(int(np.ceil((max_y - min_y) / 0.001)), 200)
-                steps_z = min(int(np.ceil((max_z - min_z) / 0.001)), 200)
-            else:
-                steps_x = min(int(np.ceil((max_x - min_x) / 0.005)), 200)
-                steps_y = min(int(np.ceil((max_y - min_y) / 0.005)), 200)
-                steps_z = min(int(np.ceil((max_z - min_z) / 0.005)), 200)
-
-            print("reconstructing in X: {}, {}, {}".format(min_x, max_x, steps_x))
-            print("reconstructing in Y: {}, {}, {}".format(min_y, max_y, steps_y))
-            print("reconstructing in Z: {}, {}, {}".format(min_z, max_z, steps_z))
-
-            holographic_x = np.linspace(min_x, max_x, steps_x)
-            holographic_y = np.linspace(min_y, max_y, steps_y)
-            holographic_z = np.linspace(min_z, max_z, steps_z)
-
-            rec_config = {
-                "xmin": min_x,
-                "xmax": max_x,
-                "xsteps": steps_x,
-                "ymin": min_y,
-                "ymax": max_y,
-                "ysteps": steps_y,
-                "zmin": min_z,
-                "zmax": max_z,
-                "zsteps": steps_z
-            }
-            self.set_config(**rec_config)
-
-            # self.radar_client.initialize_reconstruction(
-            #     tx_positions, rx_positions, holographic_x, holographic_y, holographic_z)
-            # self.radar_client.initialize_visualization()
-
-            return self.get_frame(frame_index, force_redo=False,
-                                  amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
-                                  depth_filter_kernel_size=depth_filter_kernel_size,
-                                  save_depth=save_depth,
-                                  save_pc=save_pc,
-                                  save_amplitude=save_amplitude,
-                                  save_volume=save_volume)
-        else:
-            return self.get_frame(frame_index, force_redo=force_redo,
-                                  use_intrinsic_parameters=True,
-                                  amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
-                                  depth_filter_kernel_size=depth_filter_kernel_size,
-                                  save_depth=save_depth,
-                                  save_pc=save_pc,
-                                  save_amplitude=save_amplitude,
-                                  save_volume=save_volume)
 
     def check_cached_information(self, frame_index, intr_data,
                                  amplitude_filter_threshold_dB=15,
@@ -617,7 +325,12 @@ class RadarDataLoader:
                          redo_reconstruction=False,
                          save_depth=False,
                          amplitude_filter_threshold_dB=15,
-                         depth_filter_kernel_size=1):
+                         depth_filter_kernel_size=1,
+                         frequency_indices=None,
+                         rx_antenna_indices=None,
+                         tx_antenna_indices=None,
+                         last_z_guess=None,
+                         ):
 
         if frame_index == -1:
             frame_index = len(self.radar_frames) - 1
@@ -648,11 +361,18 @@ class RadarDataLoader:
                                                        visualize=False,
                                                        meta_output_directory=self.data_path,
                                                        force_save=True,
-                                                       frequencies=raw_data_cal['fvec'])
+                                                       frequencies=raw_data_cal['fvec'],
+                                                       frequency_indices=frequency_indices,
+                                                       rx_antenna_indices=rx_antenna_indices,
+                                                       tx_antenna_indices=tx_antenna_indices
+                                                       )
             else:
-                z_coord = self.radar_client.extract_depth(reco, frequencies=raw_data_cal['fvec'],
+                z_coord = self.radar_client.extract_depth(reco, _frequencies=raw_data_cal['fvec'],
                                                           depth_filter_kernel_size=depth_filter_kernel_size,
-                                                          amplitude_filter_threshold_dB=amplitude_filter_threshold_dB)
+                                                          amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
+                                                          frequency_indices=frequency_indices,
+                                                          rx_antenna_indices=rx_antenna_indices,
+                                                          tx_antenna_indices=tx_antenna_indices)
 
             depth = z_coord * 1000  # meter -> millimeter
             # depth = np.flipud(depth)
@@ -675,7 +395,11 @@ class RadarDataLoader:
     def load_cache_volume(self, frame_index,
                           reco=None,
                           redo_reconstruction=False,
-                          save_volume=False):
+                          save_volume=False,
+                          frequency_indices=None,
+                          rx_antenna_indices=None,
+                          tx_antenna_indices=None,
+                          last_z_guess=None):
         if frame_index == -1:
             frame_index = len(self.radar_frames) - 1
 
@@ -695,7 +419,10 @@ class RadarDataLoader:
         if (not os.path.exists(os.path.join(self.data_path, "volume", filename + ".ply")) or redo_reconstruction):
             if reco is None:
                 reco = self.radar_client.reconstruct(
-                    raw_data_cal['xr'][1:95, 1:95, :], raw_data_cal['fvec'])
+                    raw_data_cal['xr'][1:95, 1:95, :], raw_data_cal['fvec'],
+                    frequency_indices=frequency_indices,
+                    rx_antenna_indices=rx_antenna_indices,
+                    tx_antenna_indices=tx_antenna_indices, last_z_guess=last_z_guess)
             if save_volume:
                 self.radar_client.save_volume(reco, os.path.join(self.data_path, "volume", filename + ".ply"), force_save=True,
                                               meta_output_directory=self.data_path)
@@ -712,7 +439,11 @@ class RadarDataLoader:
     def load_cache_maxproj(self, frame_index,
                            reco=None,
                            redo_reconstruction=False,
-                           save_amplitude=False):
+                           save_amplitude=False,
+                           frequency_indices=None,
+                           rx_antenna_indices=None,
+                           tx_antenna_indices=None,
+                           last_z_guess=None):
 
         if frame_index == -1:
             frame_index = len(self.radar_frames) - 1
@@ -733,7 +464,9 @@ class RadarDataLoader:
         if (not os.path.exists(os.path.join(self.data_path, "maxproj", filename + ".png")) or redo_reconstruction):
             if reco is None:
                 reco = self.radar_client.reconstruct(
-                    raw_data_cal['xr'][1:95, 1:95, :], raw_data_cal['fvec'])
+                    raw_data_cal['xr'][1:95, 1:95, :], raw_data_cal['fvec'],
+                    frequency_indices=frequency_indices, rx_antenna_indices=rx_antenna_indices,
+                    tx_antenna_indices=tx_antenna_indices, last_z_guess=last_z_guess)
 
             if save_amplitude:
                 max_proj = self.radar_client.save_maximum_proj(os.path.join(
@@ -758,7 +491,13 @@ class RadarDataLoader:
                       redo_reconstruction=False,
                       save_pc=False,
                       amplitude_filter_threshold_dB=15,
-                      depth_filter_kernel_size=1):
+                      depth_filter_kernel_size=1,
+                      frequency_indices=None,
+                      rx_antenna_indices=None,
+                      tx_antenna_indices=None,
+                      use_linear_pc=False,
+                      last_z_guess=None
+                      ):
 
         if frame_index == -1:
             frame_index = len(self.radar_frames) - 1
@@ -778,26 +517,59 @@ class RadarDataLoader:
 
         # if (not os.path.exists(os.path.join(self.data_path, "xyz", filename + ".ply")) or redo_reconstruction):
 
-        if depth is None:
-            reco, depth = self.load_cache_depth(frame_index, reco=reco, redo_reconstruction=redo_reconstruction, save_depth=False,
-                                                depth_filter_kernel_size=depth_filter_kernel_size,
-                                                amplitude_filter_threshold_dB=amplitude_filter_threshold_dB)
-        if max_proj is None:
-            reco, max_proj = self.load_cache_maxproj(
-                frame_index, reco=reco, redo_reconstruction=redo_reconstruction, save_amplitude=False)
+        if (not os.path.exists(os.path.join(self.data_path, "xyz", filename + ".ply")) or redo_reconstruction or not use_linear_pc):
+            if depth is None:
+                reco, depth = self.load_cache_depth(frame_index, reco=reco, redo_reconstruction=redo_reconstruction, save_depth=False,
+                                                    depth_filter_kernel_size=depth_filter_kernel_size,
+                                                    amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
+                                                    frequency_indices=frequency_indices,
+                                                    rx_antenna_indices=rx_antenna_indices,
+                                                    tx_antenna_indices=tx_antenna_indices,
+                                                    last_z_guess=last_z_guess)
+            if max_proj is None:
+                reco, max_proj = self.load_cache_maxproj(
+                    frame_index, reco=reco, redo_reconstruction=redo_reconstruction, save_amplitude=False,
+                    frequency_indices=frequency_indices, rx_antenna_indices=rx_antenna_indices,
+                    tx_antenna_indices=tx_antenna_indices, last_z_guess=last_z_guess)
 
-        if save_pc:
-            z_coord = depth * 1e-3
-            # z_coord = np.flipud(z_coord)
-            pc = self.radar_client.save_pointcloud_from_depth(os.path.join(
-                self.data_path, "xyz", filename + ".ply"), z_coord, maxproj=max_proj)
+            if save_pc:
+                z_coord = depth * 1e-3
+                # z_coord = np.flipud(z_coord)
+                pc = self.radar_client.save_pointcloud_from_depth(os.path.join(
+                    self.data_path, "xyz", filename + ".ply"), z_coord, maxproj=max_proj)
+
+            else:
+
+                if (self.xmin == self.xmax and self.xsteps == 1) or (self.ymin == self.ymax and self.ysteps == 1):
+                    self.log(
+                        "Warning: using one voxel creates a singularity in intrinsic matrix. Using internal voxel parameters for backprojection instead.")
+
+                    x_coord = np.array([self.xmin])
+                    y_coord = np.array([self.ymin])
+                    z_coord = depth[0]
+                    pc = np.stack([x_coord, y_coord, z_coord / 1000.0],
+                                  axis=-1).reshape(1, 1, 3)
+                else:
+                    intrinsics = self.get_intrinsics(frame_index)
+                    pc = self.radar_client.pointcloud_from_depth_image(
+                        depth, intrinsics, visualize=False)
+
+            if use_linear_pc:
+                pc = pc[depth > 0]
+
+                src_rgb = max_proj[depth > 0].reshape(-1)
+                normalize = matplotlib.cm.colors.Normalize(
+                    vmin=src_rgb.min(), vmax=src_rgb.max())
+                # http://www.kennethmoreland.com/color-advice/
+                # 'inferno', 'plasma', 'coolwarm'
+                s_map = matplotlib.cm.ScalarMappable(
+                    cmap=matplotlib.colormaps.get_cmap("viridis"), norm=normalize)
+                src_rgb = s_map.to_rgba(src_rgb)[:, :3]
+                max_proj = src_rgb
         else:
-            intrinsics = self.get_intrinsics(frame_index)
-            pc = self.radar_client.pointcloud_from_depth_image(
-                depth, intrinsics, visualize=False)
-            # pc = pc[depth > 0]
-        # else:
-        #    pc = self.radar_client.load_pointcloud(os.path.join(self.data_path, "xyz", filename + ".ply"))
+            pc, max_proj_colorized = self.radar_client.load_pointcloud(
+                os.path.join(self.data_path, "xyz", filename + ".ply"))
+            max_proj = max_proj_colorized
 
         self.last_reco.update({
             "reco": reco,
@@ -813,7 +585,11 @@ class RadarDataLoader:
                                 redo_reconstruction=False,
                                 save_pc=False,
                                 amplitude_filter_threshold_dB=15,
-                                depth_filter_kernel_size=1):
+                                depth_filter_kernel_size=1,
+                                frequency_indices=None,
+                                rx_antenna_indices=None,
+                                tx_antenna_indices=None,
+                                last_z_guess=None):
 
         if frame_index == -1:
             frame_index = len(self.radar_frames) - 1
@@ -847,7 +623,10 @@ class RadarDataLoader:
         if (not os.path.exists(os.path.join(self.data_path, "xyz_nomaxproj", filename + ".ply")) or redo_reconstruction):
             if reco is None:
                 reco = self.radar_client.reconstruct(
-                    raw_data_cal['xr'][1:95, 1:95, :], raw_data_cal['fvec'])
+                    raw_data_cal['xr'][1:95, 1:95, :], raw_data_cal['fvec'],
+                    frequency_indices=frequency_indices,
+                    rx_antenna_indices=rx_antenna_indices,
+                    tx_antenna_indices=tx_antenna_indices, last_z_guess=last_z_guess)
             pc, pc_amplitude = self.radar_client.extract_pointcloud_parabola_fit(reco, amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
                                                                                  depth_filter_kernel_size=depth_filter_kernel_size)
             if save_pc:
@@ -870,7 +649,13 @@ class RadarDataLoader:
                   save_volume=False,
                   averaging_factor=1,
                   use_mask=False,
-                  manual_mask=None):
+                  manual_mask=None,
+                  last_z_guess=None,
+                  frequency_indices=None,
+                  rx_antenna_indices=None,
+                  tx_antenna_indices=None,
+                  use_linear_pc=False
+                  ):
         if frame_index == -1:
             frame_index = len(self.radar_frames) - 1
 
@@ -939,7 +724,12 @@ class RadarDataLoader:
             print("Load volume...")
             if not average:
                 reco = self.load_cache_volume(
-                    frame_index, reco=reco, redo_reconstruction=redo_reconstruction, save_volume=save_volume)
+                    frame_index, reco=reco, redo_reconstruction=redo_reconstruction, save_volume=save_volume,
+                    frequency_indices=frequency_indices,
+                    rx_antenna_indices=rx_antenna_indices,
+                    tx_antenna_indices=tx_antenna_indices,
+                    last_z_guess=last_z_guess
+                )
             else:
                 num_frames = len(self.radar_frames)
                 avg_reco = None
@@ -953,10 +743,20 @@ class RadarDataLoader:
                     print("Averaging, reconstructing index: ", index)
                     if i == frame_index:
                         reco = self.load_cache_volume(
-                            index, reco=None, redo_reconstruction=redo_reconstruction, save_volume=save_volume)
+                            index, reco=None, redo_reconstruction=redo_reconstruction, save_volume=save_volume,
+                            frequency_indices=frequency_indices,
+                            rx_antenna_indices=rx_antenna_indices,
+                            tx_antenna_indices=tx_antenna_indices,
+                            last_z_guess=last_z_guess
+                        )
                     else:
                         reco = self.load_cache_volume(
-                            index, reco=None, redo_reconstruction=redo_reconstruction, save_volume=False)
+                            index, reco=None, redo_reconstruction=redo_reconstruction, save_volume=False,
+                            frequency_indices=frequency_indices,
+                            rx_antenna_indices=rx_antenna_indices,
+                            tx_antenna_indices=tx_antenna_indices,
+                            last_z_guess=last_z_guess
+                        )
                     if num_avg == 0:
                         avg_reco = reco
                     else:
@@ -967,20 +767,36 @@ class RadarDataLoader:
 
         print("load maxproj....")
         reco, max_proj = self.load_cache_maxproj(
-            frame_index, reco=reco, redo_reconstruction=redo_reconstruction, save_amplitude=save_amplitude)
+            frame_index, reco=reco, redo_reconstruction=redo_reconstruction, save_amplitude=save_amplitude,
+            frequency_indices=frequency_indices,
+            rx_antenna_indices=rx_antenna_indices,
+            tx_antenna_indices=tx_antenna_indices,
+            last_z_guess=last_z_guess
+        )
 
         print("load depth....")
         reco, depth = self.load_cache_depth(
             frame_index, reco=reco, redo_reconstruction=redo_reconstruction or redo_filtering,
             save_depth=save_depth, depth_filter_kernel_size=depth_filter_kernel_size,
-            amplitude_filter_threshold_dB=amplitude_filter_threshold_dB)
+            amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
+            frequency_indices=frequency_indices,
+            rx_antenna_indices=rx_antenna_indices,
+            tx_antenna_indices=tx_antenna_indices,
+            last_z_guess=last_z_guess
+        )
 
         print("load pc....")
         reco, depth, max_proj, pc = self.load_cache_pc(
             frame_index, reco=reco, depth=depth, max_proj=max_proj,
             redo_reconstruction=redo_reconstruction or redo_filtering,
             save_pc=save_pc, depth_filter_kernel_size=depth_filter_kernel_size,
-            amplitude_filter_threshold_dB=amplitude_filter_threshold_dB)
+            amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
+            frequency_indices=frequency_indices,
+            rx_antenna_indices=rx_antenna_indices,
+            tx_antenna_indices=tx_antenna_indices,
+            use_linear_pc=use_linear_pc,
+            last_z_guess=last_z_guess
+        )
 
         visualize = False
         if visualize:
