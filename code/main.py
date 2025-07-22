@@ -34,10 +34,10 @@ dot_thresh = -10.0
 # which reconstruction method to use:
 # - the standard backprojection algorithm is 'fscw'
 # - for additional experiments in the application section we use the 'fsk' method
-radar_reconstruction_method = "fsk"
+radar_reconstruction_method = "fscw"
 # used in ablations to selectively choose frequencies in raw radar data
 # must be a list of indices, e.g. [0, 1, 2] between 0 and 127
-frequency_indices = [120, 127]
+frequency_indices = None
 # used in ablations to selectively choose antennas in raw radar data
 # must be a list of indices, e.g. [0, 1, 2] between 0 and 93
 tx_antenna_indices = None
