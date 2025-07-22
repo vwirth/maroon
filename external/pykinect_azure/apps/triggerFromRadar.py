@@ -118,7 +118,7 @@ def initialize_device():
     global bodyTracker
 
     # Start device
-    if(args.mode == 0):
+    if (args.mode == 0):
         video_filename = os.path.join(args.directory, args.file + ".mkv")
         device = pykinect.start_device(
             config=device_config, record=True, record_filepath=video_filename)
@@ -155,8 +155,6 @@ def receive_and_process(frame_counter):
     if args.body:
         # Get body tracker frame
         body_frame = bodyTracker.update()
-        # TODO für den luggas:
-        # ab hier kannste body frame zeug auslesen und abspeichern
 
     # log depth timestamps
 
@@ -168,7 +166,7 @@ def receive_and_process(frame_counter):
     # millisec -> microsec
     system_timestamps.append(system_time_datetime.timestamp() * 1e3)
 
-    if(args.mode == 1 or args.mode == 2):
+    if (args.mode == 1 or args.mode == 2):
         frame_queue.put((color_image, depth_image,
                         frame_counter, system_time_datetime))
 
@@ -213,13 +211,13 @@ if __name__ == "__main__":
         cv2.namedWindow('Color Image', cv2.WINDOW_AUTOSIZE |
                         cv2.WINDOW_KEEPRATIO)
 
-    if(args.mode > 0):
-        if(not os.path.exists(os.path.join(args.directory, args.file))):
+    if (args.mode > 0):
+        if (not os.path.exists(os.path.join(args.directory, args.file))):
             os.mkdir(os.path.join(args.directory, args.file))
             os.mkdir(os.path.join(args.directory, args.file, "rgb"))
             os.mkdir(os.path.join(args.directory, args.file, "depth"))
 
-    if(args.mode == 1 or args.mode == 2):
+    if (args.mode == 1 or args.mode == 2):
         # Start a thread that runs write_image_asynchronously(frame_queue). Marking it as daemon allows the python
         # program to exit even though that thread is still running. The thread will then be stopped
         # when the program exits
@@ -227,7 +225,7 @@ if __name__ == "__main__":
             write_image_asynchronously, frame_queue), daemon=True).start()
         # threading.Thread(target=functools.partial(start_timer_window), daemon=True).start()
 
-    while(not thread_initialized):
+    while (not thread_initialized):
         print("Waiting for Thread to be initialized...")
         time.sleep(1)
 
@@ -236,11 +234,11 @@ if __name__ == "__main__":
 
         loop_func()
 
-        if(args.mode == 1 or args.mode == 2 or not loop):
+        if (args.mode == 1 or args.mode == 2 or not loop):
             # Wait for the frames to finish
             frame_queue.join()
 
-        if(args.mode != 2):
+        if (args.mode != 2):
             break
         # reinitialization does not work, maybe try:
         # https://github.com/microsoft/Azure-Kinect-Sensor-SDK/issues/1474
