@@ -5,12 +5,11 @@
 
 [![CC BY-NC 4.0][cc-by-nc-image]][cc-by-nc]
 
-### [Project Page 🌐](https://vwirth.github.io/maroon) | [Paper 🗒️](https://arxiv.org/abs/2411.00527) |  [Arxiv 📚](https://arxiv.org/abs/2411.00527) | [Dataset (Mini) 📁](https://faubox.rrze.uni-erlangen.de/getlink/fi43P9pBvMVCGz5xJSfRRM/maroon_mini.zip)
+### [Project Page 🌐](https://vwirth.github.io/maroon) | [Paper 🗒️](https://arxiv.org/abs/2411.00527) |  [Arxiv 📚](https://arxiv.org/abs/2411.00527) | [Dataset Full (~200GB) 📁](https://zenodo.org/records/18254440) | [Dataset Mini (~1GB) 📁](https://faubox.rrze.uni-erlangen.de/getlink/fi43P9pBvMVCGz5xJSfRRM/maroon_mini.zip) | [Data Live Viewer 🌐](https://maroon-dataset.github.io/)
 
 # 🌰 MAROON Documentation
 
 This is the official code repository accompanying the paper [MAROON](https://arxiv.org/abs/2411.00527).  
-Please note that the **full** version of the dataset will be officially released with the publication of its corresponding research paper.
 
 This repository includes a python-based dataset viewer and provides data preprocessing code for all sensor measurements of:
 * Microsoft Kinect Azure
@@ -21,15 +20,49 @@ This repository includes a python-based dataset viewer and provides data preproc
 
 Furthermore, it includes the **reconstruction code for the MIMO imaging radar** measurements.
 
+---
+**Updates**
+* [January 15, 2026] We have added synthetic ground truth for some of the objects. These can be found for each object within `photogrammetry/mesh_synthetic.obj`, respectively.
+* [January 15, 2026] We have added an additional capture object: `47_bunny_box_centered`
+* [January 15, 2026] 📣 The dataset is now available!
+
+---
 <img src="assets/viewer.gif" height="555"><img src="assets/viewmode.gif" height="555">
 
 
 ## Table of Contents
+* [Dataset](#dataset)
 * [Dependencies](#dependencies)
 * [Dataset Structure](#dataset-structure)
 * [Configuration](#configuration)
 * [Execution](#execution)
 * [Transforming Data Between Sensor Spaces](#transforming-data-between-sensor-spaces)
+
+## Dataset
+* A preview of the dataset can be found at: https://maroon-dataset.github.io/
+* A mini version of the data for one object is available at: https://faubox.rrze.uni-erlangen.de/getlink/fi43P9pBvMVCGz5xJSfRRM/maroon_mini.zip
+* The full dataset is available on Zenodo: https://zenodo.org/records/18254440. It is split into several `.zip` files:
+    * **[Required]** `0_maroon_v2_meta.zip`: Contains the metadata and calibration files about labeled objects. 
+    * **[On Demand of Sensor]** `1_maroon_v2_radar_raw.zip`: Contains the raw radar measurements, on which reconstruction can be performed by using this repository
+    * **[Optional]** `1_maroon_radar_cached_1.zip`, `1_maroon_radar_cached_2.zip`, `1_maroon_radar_cached_3.zip`: Contains the cached reconstructions. It is useful to download these in case you do not have a powerful GPU or don't want to wait for reconstruction to be performed first.
+    * **[On Demand of Sensor]** `2_maroon_v2_kinect.zip` : Contains the optical time-of-flight measurements (RGB, Infrared, Depth) of Microsoft's Kinect Azure Camera, with mask/segmentation annotations
+    * **[On Demand of Sensor]** `3_maroon_v2_realsense.zip` : Contains the optical active stereo measurements (RGB, Depth) of the Intel Realsense D435i, with mask/segmentation annotations
+    * **[On Demand of Sensor]** `4_maroon_v2_zed.zip` : Contains the optical passive stereo measurements (RGB, Depth) of Stereolabs' ZED camera, with mask/segmentation annotations
+    * **[On Demand of Sensor]** `5_maroon_v2_mvs.zip`: Contains the ground-truth measurements obtained from a Multi View Stereo (MVS) system of 5 DSLR cameras, with mask/segmentation annotations
+    * **[Optional]** `6_maroon_v2_extra.zip`: Contains the calibration measurements, and additional measurements of the empty measurement room, without any object placed in fromt.
+
+As the Zenodo website can experience website timeouts, it is recommended to download the data via the Python package [zenodo-get](https://pypi.org/project/zenodo-get/):
+```python
+pip install zenodo-get
+```
+The data can be downloaded by executing:
+```bash
+zenodo_get 18254440 -R 10
+```
+or for each `.zip` file individually:
+```bash
+zenodo_get 18254440 -R 10 -g "0_maroon_v2_meta.zip"
+```
 
 ## Dependencies
 
