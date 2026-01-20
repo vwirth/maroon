@@ -128,11 +128,7 @@ The package can be simply installed with
 python -m pip install pyrealsense2
 ```
 
-## Dataset
-
-Please note that the **full** version of the dataset will be officially released with the publication of its corresponding research paper.
-
-So far, a **mini** version of the dataset for testing purposes can be found at: https://faubox.rrze.uni-erlangen.de/getlink/fi43P9pBvMVCGz5xJSfRRM/maroon_mini.zip
+## Dataset Structure
 
 ### Overview
 The MAROON dataset contains the following structure:
