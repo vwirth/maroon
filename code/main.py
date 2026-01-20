@@ -6,22 +6,50 @@ import maroon.utils.data_utils as du
 
 import open3d as o3d
 import os
+import numpy as np
 import json
 from maroon.utils.visualization_types import *
 
-use_masks = False
-use_mask_sensors = False
+import pycuda.driver as cuda
+cuda.init()
+pycuda_ctx = cuda.Device(0).retain_primary_context()
+
+
+# maximum error that is displayed in color map
+max_error = 0.05  # 0.01
+# which error type to use, either 'projective' or 'chamfer' error
+error_type = ERROR_TYPES["projective"]
+# whether to apply segmentation mask to the source point cloud during error calculation
+use_masks = True
+# whether to apply segmentation mask to the destination point cloud during error calculation
 use_dest_mask = False
-# triangulation_threshold = pow(2, 16)
+# depth threshold for image-based triangulation
 triangulation_threshold = 0.01
-outlier_threshold = 0.01
+# how many frames to average for calculating a depth map
 averaging_factor = 1
+# which frame index to reconstruct, for all sensors
 frame_index = -1
-dot_thresh = -10
-averaging = 1
+# used to construct source mask, with this setting right now it is practically ignored
+dot_thresh = -10.0
+# which reconstruction method to use:
+# - the standard backprojection algorithm is 'fscw'
+# - for additional experiments in the application section we use the 'fsk' method
+radar_reconstruction_method = "fscw"
+# used in ablations to selectively choose frequencies in raw radar data
+# must be a list of indices, e.g. [0, 1, 2] between 0 and 127
+frequency_indices = None
+# used in ablations to selectively choose antennas in raw radar data
+# must be a list of indices, e.g. [0, 1, 2] between 0 and 93
+tx_antenna_indices = None
+rx_antenna_indices = None
+# (MM-)2FSK specific option: whether to choose a depth prior or not
+use_prior = False
+# MM-2FSK specific option: which optical sensor to use as a depth prior
+# choose from "kinect", "realsense", "zed" or "photogrammetry"
+prior_depth_sensor = "photogrammetry"
 
 
-def visualize_alignment(config, num_frames=1,
+def visualize_alignment(config,
                         error_type=ERROR_TYPES["projective"],
                         max_error=0.01,
                         offline=False):
@@ -66,19 +94,13 @@ def visualize_alignment(config, num_frames=1,
     o3d.visualization.gui.Application.instance.initialize()
 
     vis = vu.SensorVisualizer(2000, 2000)
-    create_isometric = False
-    if offline:
-        create_isometric = True
+    create_isometric = True
     kinect_space = "depth"
 
     if "mask_erosion" in metadata and config["mask_erosion"] > 0:
         erosion = metadata["mask_erosion"]
     else:
         erosion = config["mask_erosion"]
-
-    # if "radar" in metadata:
-    #     for k,v in metadata["radar"].items():
-    #         config["radar"]["reconstruction_reco_params"][k] = v
 
     if "distance_meters" in metadata and metadata["distance_meters"] == 0.3 and (not "mask_bb" in metadata or not "zmin" in metadata["mask_bb"]):
         if not "mask_bb" in metadata:
@@ -127,10 +149,19 @@ def visualize_alignment(config, num_frames=1,
     use_gt_mask = False
 
     sensor_data = {
-        "radar": {"index": frame_index, "use_mask": use_masks, "isometric": create_isometric,
-                  "amplitude_filter_threshold_dB": config["radar"]["amplitude_filter_threshold_dB"], "mask_erosion": radar_erosion,
+        "radar": {"index": frame_index,
+                  "use_mask": use_masks,
+                  "isometric": create_isometric,
+                  "amplitude_filter_threshold_dB": config["radar"]["amplitude_filter_threshold_dB"],
+                  "mask_erosion": radar_erosion,
                   "use_intrinsic_parameters": config["radar"]["use_intrinsic_parameters"],
-                  "use_gt_mask": use_gt_mask},
+                  "use_gt_mask": use_gt_mask,
+                  "reconstruction_method": radar_reconstruction_method,
+                  "frequency_indices": frequency_indices,
+                  "tx_antenna_indices": tx_antenna_indices,
+                  "rx_antenna_indices": rx_antenna_indices,
+                  "use_prior": use_prior,
+                  "prior_depth_sensor": prior_depth_sensor},
         "photogrammetry": {"index": frame_index, "use_mask": True, "isometric": create_isometric, "mask_erosion": 0},
         "kinect": {"index": frame_index, "use_mask": use_masks, "isometric": create_isometric, "data_space": kinect_space, "mask_erosion": erosion,
                    "use_gt_mask": use_gt_mask},
@@ -141,7 +172,7 @@ def visualize_alignment(config, num_frames=1,
     }
 
     vis.initialize_sensors(sensor_data, config["sensors_in_use"], config, calib, base_path=os.path.join(
-        base_path, config["reconstruction_path"]), radar_reconstruction_method="fscw", averaging=averaging_factor,
+        base_path, config["reconstruction_path"]),  averaging=averaging_factor,
         triangulation_threshold=triangulation_threshold, error_type=error_type, use_dest_mask=use_dest_mask,
         dot_thresh=dot_thresh, max_error=max_error, mask_bbmin=mask_bbmin, mask_bbmax=mask_bbmax)
 
@@ -154,41 +185,18 @@ def visualize_alignment(config, num_frames=1,
     o3d.visualization.gui.Application.instance.run()
 
 
-def interactive(config, num_frames, max_error, error_type):
+def interactive(config, max_error, error_type):
 
     visualize_alignment(config,
-                        num_frames=num_frames,
                         error_type=error_type,
                         max_error=max_error)
 
 
 def main():
-    global use_masks
-    global use_dest_mask
-    global triangulation_threshold
-    global dot_thresh
-    global averaging
-    global averaging_factor
-    global outlier_threshold
-    global frame_index
-
-    num_frames = 0
-    max_error = 0.05  # 0.01
-    error_type = ERROR_TYPES["projective"]
 
     filename = "script_config"
 
-    use_masks = True
-    use_dest_mask = True
-    triangulation_threshold = 0.01
-    outlier_threshold = 0.01
-    averaging_factor = 1
-    frame_index = -1
-    dot_thresh = -10.0
-    averaging = 1
-
     project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    print("project_path: ", project_path)
 
     config_path = os.path.join(project_path, "configs", filename+".json")
     assert os.path.exists(
@@ -196,9 +204,11 @@ def main():
     with open(config_path) as f:
         config = json.load(f)
 
-    interactive(config, num_frames,
+    interactive(config,
                 max_error, error_type)
 
 
 if __name__ == '__main__':
+    pycuda_ctx.push()
     main()
+    pycuda_ctx.pop()

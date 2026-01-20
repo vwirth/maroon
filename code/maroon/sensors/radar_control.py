@@ -31,7 +31,9 @@ class RadarControllerBase:
                      os.path.dirname(os.path.dirname(
                          os.path.dirname(os.path.dirname(__file__)))),
                      "data", "qar50sc"),
-                 averaging=1):
+                 averaging=1,
+                 method=""
+                 ):
 
         self.antenna_root = antenna_root
         self.frequency_low_ghz = frequency_low_ghz
@@ -58,6 +60,59 @@ class RadarControllerBase:
         # self.cuda_device = cuda.Device(pci_bus_id)
         # self.cuda_context = self.cuda_device.make_context()
 
+    def get_intrinsics(self, grid_size=None,
+                       bb_min=None,
+                       bb_max=None,
+                       voxel_size=None,
+                       use_hvs=True):
+
+        if grid_size is None:
+            grid_size = [float(self.grid_x_range.shape[0]-1),
+                         float(self.grid_y_range.shape[0]-1)]
+        elif len(grid_size) > 2:
+            grid_size = grid_size[:2]
+
+        grid_size = [float(max(grid_size[0], 1)),
+                     float(max(grid_size[1], 1))]
+
+        if bb_min is None:
+            bb_min = [self.grid_x_range.min(), self.grid_y_range.min()]
+        elif len(bb_min) > 2:
+            bb_min = bb_min[:2]
+        if bb_max is None:
+            bb_max = [self.grid_x_range.max(), self.grid_y_range.max()]
+        elif len(bb_max) > 2:
+            bb_max = bb_max[:2]
+
+        if voxel_size is None:
+            voxel_size = (np.array(bb_max) - np.array(bb_min)) / \
+                np.array(grid_size)
+        else:
+            voxel_size = np.array(voxel_size)
+        hvs = voxel_size / 2.0
+
+        if not use_hvs:
+            hvs = (0, 0)
+
+        bb_min = np.array(
+            [bb_min[0] - hvs[0], bb_min[1] - hvs[1]])
+        bb_max = np.array(
+            [bb_max[0] + hvs[0], bb_max[1] + hvs[1]])
+
+        assert ((bb_max - bb_min) !=
+                0).any(), "bb_min: {}, bb_max: {}, hvs: {}, voxel_size: {}".format(bb_min, bb_max, hvs, voxel_size)
+
+        intrinsics = np.eye(4)
+        intrinsics[0, 0] = grid_size[0] / (bb_max[0] - bb_min[0])
+        intrinsics[0, 3] = bb_min[0]*grid_size[0] / (bb_min[0] - bb_max[0])
+        intrinsics[1, 1] = grid_size[1] / (bb_min[1] - bb_max[1])
+        intrinsics[1, 3] = bb_min[1]*grid_size[1] / \
+            (bb_max[1] - bb_min[1]) + grid_size[1]
+        # from millimeter to meter space
+        intrinsics[2, 2] = 1000.0
+
+        return intrinsics
+
     def set_frequency_range(self, frequency_low_ghz, frequency_high_ghz, frequency_points):
         """
             Modifies the frequency range
@@ -80,6 +135,9 @@ class RadarControllerBase:
         self.grid_x_range = grid_x_range.astype(np.float32)
         self.grid_y_range = grid_y_range.astype(np.float32)
         self.grid_z_range = grid_z_range.astype(np.float32)
+        self.grid_z_range_double = grid_z_range
+        self.last_z_guess = np.float64(grid_z_range[0])
+        self.first_z_guess = self.last_z_guess
 
         # we define the radar coordinate system like this:
         #    y
@@ -108,7 +166,8 @@ class RadarControllerBase:
 
         self.reconstruction_initialized = True
 
-    def reconstruct(self, meas_data_cal, frequencies, antenna_weights=None):
+    def reconstruct(self, meas_data_cal, frequencies, antenna_weights=None, frequency_indices=None, rx_antenna_indices=None,
+                    tx_antenna_indices=None, last_z_guess=None):
         assert False, "This is a Base class that does not have this method implemented. Try to use a specialized class"
 
     def reconstruct_custom_positions(self,  reco_positions, meas_data_cal,
@@ -117,141 +176,20 @@ class RadarControllerBase:
         assert False, "This is a Base class that does not have this method implemented. Try to use a specialized class"
 
     def load_volume(self, filepath, meta_input_directory="", visualize=False):
-        """
-            Loads a volume that was stored as .ply before
-            As the holography correlation factor is stored as RGB attribute in range [0,1],
-            additional information about the maximum and minimum amplitude needs to be provided
-            by a metadata file, which is usually stored along with the .ply file
-        """
-        volume = o3d.io.read_point_cloud(filepath)
-        frame_index = os.path.basename(filepath).split(".")[0]
-
-        if (len(meta_input_directory) != 0 and os.path.exists(meta_input_directory)):
-            meta_dir = meta_input_directory
-        else:
-            meta_dir = os.path.dirname(filepath)
-
-        range_data = None
-        with open(os.path.join(meta_dir, "calibration.json"), 'r') as f:
-            range_data = json.load(f)
-        self.grid_x_range = np.linspace(range_data[frame_index]["volume"]["bb_min"][0], range_data[frame_index]
-                                        ["volume"]["bb_max"][0], range_data[frame_index]["volume"]["grid_size"][0])
-        self.grid_y_range = np.linspace(range_data[frame_index]["volume"]["bb_min"][1], range_data[frame_index]
-                                        ["volume"]["bb_max"][1], range_data[frame_index]["volume"]["grid_size"][1])
-        self.grid_z_range = np.linspace(range_data[frame_index]["volume"]["bb_min"][2], range_data[frame_index]
-                                        ["volume"]["bb_max"][2], range_data[frame_index]["volume"]["grid_size"][2])
-        reco_data = np.asarray(volume.colors).reshape(
-            self.grid_x_range.shape[0], self.grid_y_range.shape[0], self.grid_z_range.shape[0], 3)
-        reco_data = reco_data * \
-            (range_data[frame_index]["volume"]["max_amplitude"] - range_data[frame_index]["volume"]["min_amplitude"]
-             ) + range_data[frame_index]["volume"]["min_amplitude"]
-
-        if visualize:
-            pixel_x, pixel_y, pixel_z = np.meshgrid(
-                self.grid_x_range, self.grid_y_range, self.grid_z_range)
-
-            xyz = np.stack(
-                [pixel_x, pixel_y, pixel_z], axis=-1)
-            pc = o3d.geometry.PointCloud()
-            pc.points = o3d.utility.Vector3dVector(
-                xyz.reshape(-1, 3))
-            pc.colors = o3d.utility.Vector3dVector(
-                reco_data.reshape(-1, 3))
-
-        if visualize:
-            visualizer = o3d.visualization.Visualizer()
-            visualizer.create_window()
-            visualizer.add_geometry(pc)
-            opt = visualizer.get_render_option()
-            opt.show_coordinate_frame = True
-            visualizer.run()
-            visualizer.destroy_window()
-
-        return reco_data[:, :, :, 0]
+        assert False, "This is a Base class that does not have this method implemented. Try to use a specialized class"
 
     def save_volume(self, reco_image, filepath, visualize=False, meta_output_directory="", force_save=False):
-        """
-            Stores a reconstructed volume as .ply file
-            As the holography correlation factor is stored as RGB attribute in range [0,1],
-            additional information about the maximum and minimum amplitude needs to be stored
-            in a metadata file 'calibration.json'
-        """
-
-        # reco_image shape: [x,y,z]
-        assert os.path.exists(os.path.dirname(filepath))
-        frame_index = os.path.basename(filepath).split(".")[0]
-
-        if len(meta_output_directory) == 0 or not os.path.exists(meta_output_directory):
-            intrinsics_file = os.path.join(os.path.dirname(
-                filepath), "calibration.json")
-        else:
-            intrinsics_file = os.path.join(
-                meta_output_directory, "calibration.json")
-        if os.path.exists(intrinsics_file):
-            with open(intrinsics_file, 'r') as f:
-                try:
-                    json_data = json.load(f)
-                except Exception as e:
-                    print(e)
-                    json_data = {}
-        else:
-            json_data = {}
-
-        pixel_x, pixel_y, pixel_z = np.meshgrid(
-            self.grid_x_range, self.grid_y_range, self.grid_z_range)
-        xyz = np.stack(
-            [pixel_x, pixel_y, pixel_z], axis=-1)
-        intensity = np.abs(reco_image)
-        max_intensity = np.max(intensity).item()
-        min_intensity = np.min(intensity).item()
-        intensity = (np.abs(reco_image).reshape(-1) -
-                     min_intensity) / (max_intensity - min_intensity)
-
-        colors = np.stack([intensity, np.zeros_like(
-            intensity), np.zeros_like(intensity)], axis=-1)
-
-        pc = o3d.geometry.PointCloud()
-        pc.points = o3d.utility.Vector3dVector(
-            xyz.reshape(-1, 3))
-
-        pc.colors = o3d.utility.Vector3dVector(
-            colors)
-
-        if visualize:
-            visualizer = o3d.visualization.Visualizer()
-            visualizer.create_window()
-            visualizer.add_geometry(pc)
-            opt = visualizer.get_render_option()
-            opt.show_coordinate_frame = True
-            visualizer.run()
-            visualizer.destroy_window()
-
-        o3d.io.write_point_cloud(filepath, pc)
-        with open(intrinsics_file, "w") as f:
-            output = {}
-            output[frame_index] = {}
-            output[frame_index]["volume"] = {}
-            output[frame_index]["volume"]["min_amplitude"] = min_intensity
-            output[frame_index]["volume"]["max_amplitude"] = max_intensity
-            output[frame_index]["volume"]["bb_min"] = [self.grid_x_range.min().item(
-            ), self.grid_y_range.min().item(), self.grid_z_range.min().item()]
-            output[frame_index]["volume"]["bb_max"] = [self.grid_x_range.max().item(
-            ), self.grid_y_range.max().item(), self.grid_z_range.max().item()]
-            output[frame_index]["volume"]["grid_size"] = [
-                self.grid_x_range.shape[0], self.grid_y_range.shape[0], self.grid_z_range.shape[0]]
-
-            output, ret = self.merge_meta_data(
-                json_data, output, force=force_save)
-            if ret == False:
-                exit(0)
-
-            json.dump(output, f, sort_keys=True)
+        assert False, "This is a Base class that does not have this method implemented. Try to use a specialized class"
 
     def merge_meta_data(self, meta_old, meta_new, force=False):
         meta_merged = {**meta_new}
         cont = force
         for k, v in meta_old.items():
             if k in meta_new:
+                assert type(
+                    meta_old[k]) != np.ndarray, "detected a numpy array at: {}".format(k)
+                assert type(
+                    meta_new[k]) != np.ndarray, "detected a numpy array at: {}".format(k)
                 if type(v) is dict:
                     meta_merged[k], ret = self.merge_meta_data(
                         meta_old[k], meta_new[k], force=force)
@@ -259,22 +197,24 @@ class RadarControllerBase:
                         return meta_merged[k], ret
                 elif type(v) is list:
                     for l1, l2 in zip(meta_old[k], meta_new[k]):
-                        if l1 != l2 and not cont:
-                            print("Found inconsistencies in updated metadata")
-                            print("Old: {}".format(meta_old))
-                            print("----------------------------------------")
-                            print("New: {}".format(meta_new))
+                        if l1 != l2 and not cont and not force:
+                            self.log(
+                                "Found inconsistencies in updated metadata")
+                            self.log("Old: {}".format(meta_old))
+                            self.log(
+                                "----------------------------------------")
+                            self.log("New: {}".format(meta_new))
                             answer = input("****** Continue? (y/n)")
                             if answer.lower().strip() != "y":
                                 return meta_merged, False
                             else:
                                 cont = True
                 else:
-                    if meta_old[k] != meta_new[k] and not cont:
-                        print("Found inconsistencies in updated metadata")
-                        print("Old: {}".format(meta_old))
-                        print("----------------------------------------")
-                        print("New: {}".format(meta_new))
+                    if meta_old[k] != meta_new[k] and not cont and not force:
+                        self.log("Found inconsistencies in updated metadata")
+                        self.log("Old: {}".format(meta_old))
+                        self.log("----------------------------------------")
+                        self.log("New: {}".format(meta_new))
                         answer = input("****** Continue? (y/n)")
                         if answer.lower().strip() != "y":
                             return meta_merged, False
@@ -341,8 +281,11 @@ class RadarControllerBase:
 
         return rec_data_max, intensity
 
-    def extract_depth(self, reco_image, frequencies=False, amplitude_filter_threshold_dB=15,
-                      depth_filter_kernel_size=15, visualize=False):
+    def extract_depth(self, reco_image, _frequencies=False, amplitude_filter_threshold_dB=15,
+                      depth_filter_kernel_size=15, visualize=False,  frequency_indices=None,
+                      rx_antenna_indices=None,
+                      tx_antenna_indices=None,
+                      data_filter=None):
         assert False, "This is a Base class that does not have this method implemented. Try to use a specialized class"
 
     def save_maximum_proj(self, filepath, reco_image):
@@ -371,7 +314,9 @@ class RadarControllerBase:
                    meta_output_directory="",
                    amplitude_filter_threshold_dB=15,
                    depth_filter_kernel_size=15, visualize=False,
-                   force_save=False):
+                   force_save=False, frequency_indices=None,
+                   rx_antenna_indices=None,
+                   tx_antenna_indices=None):
         """
             Saves depth map as an image. 
             To be able to reconstruct a point cloud from the depth image afterwards, additional
@@ -399,8 +344,10 @@ class RadarControllerBase:
             json_data = {}
 
         assert len(reco_image.shape) == 3
-        z_coord = self.extract_depth(reco_image, frequencies=frequencies, depth_filter_kernel_size=depth_filter_kernel_size,
-                                     amplitude_filter_threshold_dB=amplitude_filter_threshold_dB)
+        z_coord = self.extract_depth(reco_image, _frequencies=frequencies, depth_filter_kernel_size=depth_filter_kernel_size,
+                                     amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
+                                     frequency_indices=frequency_indices, rx_antenna_indices=rx_antenna_indices,
+                                     tx_antenna_indices=tx_antenna_indices)
 
         # flip the y-coordinate such that it corresponds to the direction of
         # the storage layout of an image
@@ -423,18 +370,7 @@ class RadarControllerBase:
         depth = depth.astype(np.uint16)
         cv2.imwrite(filepath, depth)
 
-        grid_size = [float(self.grid_x_range.shape[0]-1),
-                     float(self.grid_y_range.shape[0]-1)]
-        bb_min = [self.grid_x_range.min(), self.grid_y_range.min()]
-        bb_max = [self.grid_x_range.max(), self.grid_y_range.max()]
-        intrinsics = np.eye(4)
-        intrinsics[0, 0] = grid_size[0] / (bb_max[0] - bb_min[0])
-        intrinsics[0, 3] = bb_min[0]*grid_size[0] / (bb_min[0] - bb_max[0])
-        intrinsics[1, 1] = grid_size[1] / (bb_min[1] - bb_max[1])
-        intrinsics[1, 3] = bb_min[1]*grid_size[1] / \
-            (bb_max[1] - bb_min[1]) + grid_size[1]
-        # from millimeter to meter space
-        intrinsics[2, 2] = 1000.0
+        intrinsics = self.get_intrinsics()
 
         json_data_new = {
             frame_index: {
@@ -525,31 +461,7 @@ class RadarControllerBase:
         pixels = np.stack([pixel_x, pixel_y, depth, ones], axis=-1)
 
         if intrinsics is None:
-            # intrinsics = np.eye(4)
-            # # scale from pixels to world space coordinates
-            # intrinsics[0, 0] = (self.grid_x_range.max(
-            # ) - self.grid_x_range.min()) / float(self.grid_x_range.shape[0]-1)
-            # intrinsics[1, 1] = (self.grid_y_range.max(
-            # ) - self.grid_y_range.min()) / float(self.grid_y_range.shape[0]-1)
-            # # from millimeter to meter space
-            # intrinsics[2, 2] = 1.0 / 1000.0
-
-            # # translate from pixels to world space coordinates
-            # intrinsics[0, 3] = self.grid_x_range.min()
-            # intrinsics[1, 3] = self.grid_y_range.min()
-
-            grid_size = [float(self.grid_x_range.shape[0]-1),
-                         float(self.grid_y_range.shape[0]-1)]
-            bb_min = [self.grid_x_range.min(), self.grid_y_range.min()]
-            bb_max = [self.grid_x_range.max(), self.grid_y_range.max()]
-            intrinsics = np.eye(4)
-            intrinsics[0, 0] = grid_size[0] / (bb_max[0] - bb_min[0])
-            intrinsics[0, 3] = bb_min[0]*grid_size[0] / (bb_min[0] - bb_max[0])
-            intrinsics[1, 1] = grid_size[1] / (bb_min[1] - bb_max[1])
-            intrinsics[1, 3] = bb_min[1]*grid_size[1] / \
-                (bb_max[1] - bb_min[1]) + grid_size[1]
-            # from millimeter to meter space
-            intrinsics[2, 2] = 1000.0
+            intrinsics = self.get_intrinsics()
 
         intrinsics_inv = np.linalg.inv(intrinsics)
         xyz = np.matmul(pixels, intrinsics_inv.transpose())
@@ -623,7 +535,7 @@ class RadarControllerBase:
 
         return xyz_nonzero
 
-    def save_pointcloud_from_depth(self, filepath, z_coordinate, maxproj=None, visualize=False):
+    def save_pointcloud_from_depth(self, filepath, z_coordinate, maxproj=None):
         """
             Store pointcloud from depth as .ply file
             In contrast to 'pointcloud_from_depth_image' this does not assume a stored depth
@@ -692,152 +604,52 @@ class RadarControllerFSCW(RadarControllerBase):
         RadarControllerBase.__init__(self, frequency_low_ghz=frequency_low_ghz,
                                      frequency_high_ghz=frequency_high_ghz, frequency_points=frequency_points,
                                      antenna_root=antenna_root,
-                                     averaging=averaging)
+                                     averaging=averaging,
+                                     method="fscw")
 
     # overwrites method of 'RadarControllerBase'
-    def reconstruct(self, meas_data_cal, frequencies, antenna_weights=None):
+    def reconstruct(self, meas_data_cal, _frequencies, antenna_weights=None,
+                    frequency_indices=None, rx_antenna_indices=None,
+                    tx_antenna_indices=None, last_z_guess=None):
         """
             Performs SFCW reconstruction by generating hypotheses within a voxel grid
         """
         assert self.reconstruction_initialized, "You need to call initialize_reconstruction() before this method"
 
-        # start = time.time()
-        # res = self.holo_reconstruction_sfcw_cuda_slow(
-        #     meas_data_cal, frequencies, antenna_weights=antenna_weights)
-        # end = time.time()
-        # print("Elapsed time (naive): ", end-start)
-        start = time.time()
-        res = self.holo_reconstruction_sfcw_cuda_fast(
-            meas_data_cal, frequencies, antenna_weights=antenna_weights)
-        end = time.time()
-        print("Elapsed time (optimized): ", end-start)
+        if frequency_indices is not None and len(_frequencies) != len(frequency_indices):
+            print("Using reduced frequency set: {}".format(frequency_indices))
+            frequencies = _frequencies[frequency_indices]
+        else:
+            frequencies = _frequencies
+
+        if (frequency_indices is not None and meas_data_cal.shape[-1] != len(frequency_indices)):
+            meas_data_cal = meas_data_cal[:, :, frequency_indices]
+
+        tx_positions = self.tx_positions
+        rx_positions = self.rx_positions
+        if rx_antenna_indices is not None:
+            print("Using Rx antenna indices: {}".format(rx_antenna_indices))
+            meas_data_cal = meas_data_cal[rx_antenna_indices]
+
+            rx_positions = np.ravel(
+                rx_positions.reshape(-1, 3)[rx_antenna_indices])
+        if tx_antenna_indices is not None:
+            print("Using Tx antenna indices: {}".format(tx_antenna_indices))
+            meas_data_cal = meas_data_cal[:, tx_antenna_indices]
+            tx_positions = np.ravel(
+                tx_positions.reshape(-1, 3)[tx_antenna_indices])
+
+        tx_positions = np.ravel(tx_positions.astype(np.float32))
+        rx_positions = np.ravel(rx_positions.astype(np.float32))
+
+        res = self.holo_reconstruction_sfcw_cuda(
+            meas_data_cal, frequencies, rx_positions, tx_positions, antenna_weights=antenna_weights)
+
         return res
 
-    def holo_reconstruction_sfcw_cuda_slow(self,  meas_data_cal, frequencies, antenna_weights=None):
+    def holo_reconstruction_sfcw_cuda(self,  meas_data_cal, frequencies, rx_positions, tx_positions,
+                                      antenna_weights=None):
         assert self.reconstruction_initialized, "You need to call initialize_reconstruction() before this method"
-
-        # print("Reconstruction in x-range: {}".format(self.grid_x_range))
-        # print("Reconstruction in y-range: {}".format(self.grid_y_range))
-        # print("Reconstruction in z-range: {}".format(self.grid_z_range))
-
-        mod = load_kernel_from_cu(os.path.join(
-            os.path.dirname(__file__), "cuda", "holo_reco_sfcw.cu"))
-
-        reco_image = np.zeros(
-            (self.grid_x_range.shape[0], self.grid_y_range.shape[0], self.grid_z_range.shape[0]), dtype=np.complex64)
-        reco_image = np.ravel(reco_image)
-        reco_image_pcf = np.zeros(
-            (self.grid_x_range.shape[0], self.grid_y_range.shape[0], self.grid_z_range.shape[0], self.num_rx_antennas), dtype=np.complex64)
-        reco_image_pcf = np.ravel(reco_image_pcf)
-
-        time_signal = np.complex64(meas_data_cal)
-        time_signal_length = np.int32(len(frequencies))
-        frequencies = np.float32(frequencies)
-
-        # copy stuff to gpu
-        grid_x_range_gpu = cuda.mem_alloc(self.grid_x_range.nbytes)
-        grid_y_range_gpu = cuda.mem_alloc(self.grid_y_range.nbytes)
-        grid_z_range_gpu = cuda.mem_alloc(self.grid_z_range.nbytes)
-
-        frequencies_gpu = cuda.mem_alloc(frequencies.nbytes)
-        tx_positions_gpu = cuda.mem_alloc(self.tx_positions.nbytes)
-        rx_positions_gpu = cuda.mem_alloc(self.rx_positions.nbytes)
-        reco_image_gpu = cuda.mem_alloc(reco_image.nbytes)
-        reco_image_pcf_gpu = cuda.mem_alloc(reco_image_pcf.nbytes)
-
-        time_signal = np.ravel(time_signal)
-        if antenna_weights is not None:
-            time_signal = np.complex64(
-                time_signal*np.ravel(np.repeat(antenna_weights, len(frequencies))))
-            # time_signal = time_signal
-
-        time_signal_gpu = cuda.mem_alloc(time_signal.nbytes)
-
-        cuda.memcpy_htod(grid_x_range_gpu, self.grid_x_range)
-
-        cuda.memcpy_htod(tx_positions_gpu, self.tx_positions)
-        cuda.memcpy_htod(rx_positions_gpu, self.rx_positions)
-        cuda.memcpy_htod(reco_image_gpu, reco_image)
-        cuda.memcpy_htod(reco_image_pcf_gpu, reco_image_pcf)
-        cuda.memcpy_htod(time_signal_gpu, time_signal)
-        cuda.memcpy_htod(grid_y_range_gpu, self.grid_y_range)
-        cuda.memcpy_htod(grid_z_range_gpu, self.grid_z_range)
-        cuda.memcpy_htod(frequencies_gpu, frequencies)
-
-        func = mod.get_function("holo_reco_sfcw_time_domain")
-
-        x_steps = np.int32(len(self.grid_x_range))
-        y_steps = np.int32(len(self.grid_y_range))
-        z_steps = np.int32(len(self.grid_z_range))
-
-        block_size = (8, 8, 8)
-        grid_size = (int(math.ceil(len(self.grid_x_range) / block_size[0])),
-                     int(math.ceil(len(self.grid_y_range) / block_size[1])),
-                     int(math.ceil(len(self.grid_z_range) / block_size[2])))
-
-        func(
-            tx_positions_gpu,
-            self.num_tx_antennas,
-            rx_positions_gpu,
-            self.num_rx_antennas,
-            grid_x_range_gpu,
-            x_steps,
-            grid_y_range_gpu,
-            y_steps,
-            grid_z_range_gpu,
-            z_steps,
-            reco_image_gpu,
-            reco_image_pcf_gpu,
-            time_signal_gpu,
-            time_signal_length,
-            frequencies_gpu,
-            block=block_size, grid=grid_size)
-
-        cuda.memcpy_dtoh(reco_image, reco_image_gpu)
-        cuda.memcpy_dtoh(reco_image_pcf, reco_image_pcf_gpu)
-
-        reco_image = reco_image.reshape(
-            (self.grid_x_range.shape[0], self.grid_y_range.shape[0], self.grid_z_range.shape[0]))
-        reco_image = reco_image / (self.num_rx_antennas*self.num_tx_antennas)
-
-        # as the X-Axis is the first component here
-        # the coordinate system currently looks like this:
-        #       z
-        #      /
-        # ---/-------> y
-        #    |
-        #    |
-        #    v
-        #    x
-        # so we have to rotate the volume to get a coordinate system
-        # like this
-        #    y
-        #    ^
-        #    |  z
-        #    | /
-        # ---/-------> x
-        #    |
-        reco_image = np.rot90(reco_image, k=1, axes=(0, 1))
-
-        # Vanessa: Free variables
-        tx_positions_gpu.free()
-        rx_positions_gpu.free()
-        grid_x_range_gpu.free()
-        grid_y_range_gpu.free()
-        grid_z_range_gpu.free()
-        reco_image_gpu.free()
-        reco_image_pcf_gpu.free()
-        time_signal_gpu.free()
-        frequencies_gpu.free()
-
-        return reco_image
-
-    def holo_reconstruction_sfcw_cuda_fast(self,  meas_data_cal, frequencies, antenna_weights=None):
-        assert self.reconstruction_initialized, "You need to call initialize_reconstruction() before this method"
-
-        # print("Reconstruction in x-range: {}".format(self.grid_x_range))
-        # print("Reconstruction in y-range: {}".format(self.grid_y_range))
-        # print("Reconstruction in z-range: {}".format(self.grid_z_range))
 
         mod = load_kernel_from_cu(os.path.join(
             os.path.dirname(os.path.dirname(__file__)), "cuda", "holo_reco_sfcw_optimized.cu"))
@@ -845,9 +657,6 @@ class RadarControllerFSCW(RadarControllerBase):
         reco_image = np.zeros(
             (self.grid_x_range.shape[0], self.grid_y_range.shape[0], self.grid_z_range.shape[0]), dtype=np.complex64)
         reco_image = np.ravel(reco_image)
-        reco_image_pcf = np.zeros(
-            (self.grid_x_range.shape[0], self.grid_y_range.shape[0], self.grid_z_range.shape[0], self.num_rx_antennas), dtype=np.complex64)
-        reco_image_pcf = np.ravel(reco_image_pcf)
 
         time_signal = np.complex64(meas_data_cal)
         time_signal_length = np.int32(len(frequencies))
@@ -859,8 +668,8 @@ class RadarControllerFSCW(RadarControllerBase):
         grid_z_range_gpu = cuda.mem_alloc(self.grid_z_range.nbytes)
 
         frequencies_gpu = cuda.mem_alloc(frequencies.nbytes)
-        tx_positions_gpu = cuda.mem_alloc(self.tx_positions.nbytes)
-        rx_positions_gpu = cuda.mem_alloc(self.rx_positions.nbytes)
+        tx_positions_gpu = cuda.mem_alloc(tx_positions.nbytes)
+        rx_positions_gpu = cuda.mem_alloc(rx_positions.nbytes)
         reco_image_gpu = cuda.mem_alloc(reco_image.nbytes)
 
         # transpose foe efficient data order on GPU
@@ -875,8 +684,8 @@ class RadarControllerFSCW(RadarControllerBase):
         c = 299792458.0
 
         cuda.memcpy_htod(grid_x_range_gpu, self.grid_x_range / c)
-        cuda.memcpy_htod(tx_positions_gpu, self.tx_positions / c)
-        cuda.memcpy_htod(rx_positions_gpu, self.rx_positions / c)
+        cuda.memcpy_htod(tx_positions_gpu, tx_positions / c)
+        cuda.memcpy_htod(rx_positions_gpu, rx_positions / c)
         cuda.memcpy_htod(reco_image_gpu, reco_image)
         cuda.memcpy_htod(time_signal_gpu, time_signal)
         cuda.memcpy_htod(grid_y_range_gpu, self.grid_y_range / c)
@@ -898,9 +707,9 @@ class RadarControllerFSCW(RadarControllerBase):
 
         func(
             tx_positions_gpu,
-            self.num_tx_antennas,
+            np.int32(tx_positions.shape[0] // 3),
             rx_positions_gpu,
-            self.num_rx_antennas,
+            np.int32(rx_positions.shape[0] // 3),
             grid_x_range_gpu,
             x_steps,
             grid_y_range_gpu,
@@ -916,7 +725,9 @@ class RadarControllerFSCW(RadarControllerBase):
 
         reco_image = reco_image.reshape(
             (self.grid_x_range.shape[0], self.grid_y_range.shape[0], self.grid_z_range.shape[0]))
-        reco_image = reco_image / (self.num_rx_antennas*self.num_tx_antennas)
+        reco_image = reco_image / \
+            np.float32((rx_positions.shape[0] // 3)
+                       * (tx_positions.shape[0] // 3))
 
         # as the X-Axis is the first component here
         # the coordinate system currently looks like this:
@@ -948,7 +759,7 @@ class RadarControllerFSCW(RadarControllerBase):
         return reco_image
 
     def reconstruct_custom_positions(self,  reco_positions, meas_data_cal,
-                                     frequencies, antenna_weights=None, reco_normals=None,
+                                     frequencies, rx_positions, tx_positions, antenna_weights=None, reco_normals=None,
                                      use_normal_weights=False):
         """
             In contrast to the regular SFCW reconstruction, this method does not use 
@@ -980,8 +791,8 @@ class RadarControllerFSCW(RadarControllerBase):
         # copy stuff to gpu
         reco_positions_gpu = cuda.mem_alloc(reco_positions.nbytes)
         frequencies_gpu = cuda.mem_alloc(frequencies.nbytes)
-        tx_positions_gpu = cuda.mem_alloc(self.tx_positions.nbytes)
-        rx_positions_gpu = cuda.mem_alloc(self.rx_positions.nbytes)
+        tx_positions_gpu = cuda.mem_alloc(tx_positions.nbytes)
+        rx_positions_gpu = cuda.mem_alloc(rx_positions.nbytes)
         reco_image_gpu = cuda.mem_alloc(reco_image.nbytes)
 
         time_signal = np.ravel(time_signal)
@@ -992,8 +803,8 @@ class RadarControllerFSCW(RadarControllerBase):
 
         time_signal_gpu = cuda.mem_alloc(time_signal.nbytes)
 
-        cuda.memcpy_htod(tx_positions_gpu, self.tx_positions)
-        cuda.memcpy_htod(rx_positions_gpu, self.rx_positions)
+        cuda.memcpy_htod(tx_positions_gpu, tx_positions)
+        cuda.memcpy_htod(rx_positions_gpu, rx_positions)
         # cuda.memcpy_htod(reco_image_gpu, reco_image)
         cuda.memcpy_htod(reco_positions_gpu, reco_positions)
         cuda.memcpy_htod(time_signal_gpu, time_signal)
@@ -1015,9 +826,9 @@ class RadarControllerFSCW(RadarControllerBase):
 
         func(
             tx_positions_gpu,
-            self.num_tx_antennas,
+            np.int32(tx_positions.shape[0] // 3),
             rx_positions_gpu,
-            self.num_rx_antennas,
+            np.int32(rx_positions.shape[0] // 3),
             reco_positions_gpu,
             reco_positions_size,
             reco_image_gpu,
@@ -1028,7 +839,8 @@ class RadarControllerFSCW(RadarControllerBase):
 
         cuda.memcpy_dtoh(reco_image, reco_image_gpu)
 
-        reco_image = reco_image / (self.num_rx_antennas*self.num_tx_antennas)
+        reco_image = reco_image / \
+            ((rx_positions.shape[0] // 3)*(tx_positions.shape[0] // 3))
 
         tx_positions_gpu.free()
         rx_positions_gpu.free()
@@ -1040,286 +852,142 @@ class RadarControllerFSCW(RadarControllerBase):
 
         return reco_image
 
-    def reconstruct_custom_positions_noaggregate(self,  reco_positions, meas_data_cal,
-                                                 frequencies, antenna_weights=None, reco_normals=None,
-                                                 use_normal_weights=False):
+    def load_volume(self, filepath, meta_input_directory="", visualize=False):
         """
-            In contrast to the regular SFCW reconstruction, this method does not use 
-            a voxel grid but instead takes 'reco_positions' (array of size Nx3) directly as
-            input for generating hypotheses
+            Loads a volume that was stored as .ply before
+            As the holography correlation factor is stored as RGB attribute in range [0,1],
+            additional information about the maximum and minimum amplitude needs to be provided
+            by a metadata file, which is usually stored along with the .ply file
         """
-        assert self.reconstruction_initialized, "You need to call initialize_reconstruction() before this method"
+        volume = o3d.io.read_point_cloud(filepath)
+        frame_index = os.path.basename(filepath).split(".")[0]
 
-        # print("Reconstruction for points: {} ({})".format(
-        #     reco_positions, reco_positions.shape))
-
-        mod = load_kernel_from_cu(os.path.join(
-            os.path.dirname(__file__), "cuda", "holo_reco_sfcw_optimized.cu"))
-
-        # time_signal = np.complex64(meas_data_cal.transpose(2, 0, 1))
-        time_signal = np.complex64(meas_data_cal)
-        time_signal_length = np.int32(len(frequencies))
-        frequencies = np.float32(frequencies)
-        reco_image = np.zeros(
-            (reco_positions.shape[0], self.rx_positions.shape[0] // 3, self.tx_positions.shape[0] // 3), dtype=np.complex64).reshape(-1)
-
-        reco_positions_size = np.int32((reco_positions.shape[0]))
-        if reco_normals is not None:
-            reco_positions = np.concatenate(
-                [reco_positions, reco_normals], axis=0).reshape(-1).astype(np.float32)
+        if (len(meta_input_directory) != 0 and os.path.exists(meta_input_directory)):
+            meta_dir = meta_input_directory
         else:
-            reco_positions = reco_positions.reshape(-1).astype(np.float32)
+            meta_dir = os.path.dirname(filepath)
 
-        c = 299792458.0
-        # reco_normals = reco_normals.reshape(-1).astype(np.float32)
-        # reco_normals_gpu = cuda.mem_alloc(reco_normals.nbytes)
-        # cuda.memcpy_htod(reco_normals_gpu, reco_normals)
+        range_data = None
+        with open(os.path.join(meta_dir, "calibration.json"), 'r') as f:
+            range_data = json.load(f)
+        self.grid_x_range = np.linspace(range_data[frame_index]["volume"]["bb_min"][0], range_data[frame_index]
+                                        ["volume"]["bb_max"][0], range_data[frame_index]["volume"]["grid_size"][0])
+        self.grid_y_range = np.linspace(range_data[frame_index]["volume"]["bb_min"][1], range_data[frame_index]
+                                        ["volume"]["bb_max"][1], range_data[frame_index]["volume"]["grid_size"][1])
+        self.grid_z_range = np.linspace(range_data[frame_index]["volume"]["bb_min"][2], range_data[frame_index]
+                                        ["volume"]["bb_max"][2], range_data[frame_index]["volume"]["grid_size"][2])
+        reco_data = np.asarray(volume.colors).reshape(
+            self.grid_x_range.shape[0], self.grid_y_range.shape[0], self.grid_z_range.shape[0], 3)
+        reco_data = reco_data * \
+            (range_data[frame_index]["volume"]["max_amplitude"] - range_data[frame_index]["volume"]["min_amplitude"]
+             ) + range_data[frame_index]["volume"]["min_amplitude"]
 
-        # copy stuff to gpu
-        reco_positions_gpu = cuda.mem_alloc(reco_positions.nbytes)
-        frequencies_gpu = cuda.mem_alloc(frequencies.nbytes)
-        tx_positions_gpu = cuda.mem_alloc(self.tx_positions.nbytes)
-        rx_positions_gpu = cuda.mem_alloc(self.rx_positions.nbytes)
-        reco_image_gpu = cuda.mem_alloc(reco_image.nbytes)
+        if visualize:
+            pixel_x, pixel_y, pixel_z = np.meshgrid(
+                self.grid_x_range, self.grid_y_range, self.grid_z_range)
 
-        time_signal = np.ravel(time_signal)
-        if antenna_weights is not None:
-            time_signal = np.complex64(
-                time_signal*np.ravel(np.repeat(antenna_weights, len(frequencies))).transpose(2, 0, 1))
-            # time_signal = time_signal
+            xyz = np.stack(
+                [pixel_x, pixel_y, pixel_z], axis=-1)
+            pc = o3d.geometry.PointCloud()
+            pc.points = o3d.utility.Vector3dVector(
+                xyz.reshape(-1, 3))
+            pc.colors = o3d.utility.Vector3dVector(
+                reco_data.reshape(-1, 3))
 
-        time_signal_gpu = cuda.mem_alloc(time_signal.nbytes)
+        if visualize:
+            visualizer = o3d.visualization.Visualizer()
+            visualizer.create_window()
+            visualizer.add_geometry(pc)
+            opt = visualizer.get_render_option()
+            opt.show_coordinate_frame = True
+            visualizer.run()
+            visualizer.destroy_window()
 
-        cuda.memcpy_htod(tx_positions_gpu, self.tx_positions / c)
-        cuda.memcpy_htod(rx_positions_gpu, self.rx_positions / c)
-        cuda.memcpy_htod(reco_positions_gpu, reco_positions / c)
-        cuda.memcpy_htod(time_signal_gpu, time_signal)
-        addr = mod.get_global("frequencies")
-        # move frequencies to __const__ memory
-        cuda.memcpy_htod(addr[0], frequencies * 2 * math.pi)
-
-        func = mod.get_function(
-            "holo_reco_sfcw_time_domain_custom_positions_noaggregate")
-
-        block_size = (32, 8, 1)
-        grid_size = (1,
-                     int(math.ceil(reco_positions_size / block_size[1])), 1)
-
-        func(
-            tx_positions_gpu,
-            self.num_tx_antennas,
-            rx_positions_gpu,
-            self.num_rx_antennas,
-            reco_positions_gpu,
-            reco_positions_size,
-            reco_image_gpu,
-            time_signal_gpu,
-            time_signal_length,
-            block=block_size, grid=grid_size)
-
-        cuda.memcpy_dtoh(reco_image, reco_image_gpu)
-
-        reco_image = reco_image.reshape(
-            reco_positions_size, self.rx_positions.shape[0] // 3, self.tx_positions.shape[0] // 3)
-
-        tx_positions_gpu.free()
-        rx_positions_gpu.free()
-        reco_positions_gpu.free()
-        reco_image_gpu.free()
-        time_signal_gpu.free()
-        frequencies_gpu.free()
-        # reco_normals_gpu.free()
-
-        return reco_image
-
-    def reconstruct_custom_positions_hypotheses(self,  reco_positions, meas_data_cal,
-                                                frequencies, antenna_weights=None, reco_normals=None,
-                                                use_normal_weights=False):
-        """
-            In contrast to the regular SFCW reconstruction, this method does not use 
-            a voxel grid but instead takes 'reco_positions' (array of size Nx3) directly as
-            input for generating hypotheses
-        """
-        assert self.reconstruction_initialized, "You need to call initialize_reconstruction() before this method"
-
-        # print("Reconstruction for points: {} ({})".format(
-        #     reco_positions, reco_positions.shape))
-
-        mod = load_kernel_from_cu(os.path.join(
-            os.path.dirname(__file__), "cuda", "holo_reco_sfcw_optimized.cu"))
-
-        # time_signal = np.complex64(meas_data_cal.transpose(2, 0, 1))
-        time_signal = np.complex64(meas_data_cal)
-        time_signal_length = np.int32(len(frequencies))
-        frequencies = np.float32(frequencies)
-        reco_image = np.zeros(
-            (reco_positions.shape[0], self.rx_positions.shape[0] // 3, self.tx_positions.shape[0] // 3), dtype=np.complex64).reshape(-1)
-
-        reco_positions_size = np.int32((reco_positions.shape[0]))
-        if reco_normals is not None:
-            reco_positions = np.concatenate(
-                [reco_positions, reco_normals], axis=0).reshape(-1).astype(np.float32)
-        else:
-            reco_positions = reco_positions.reshape(-1).astype(np.float32)
-
-        c = 299792458.0
-        # reco_normals = reco_normals.reshape(-1).astype(np.float32)
-        # reco_normals_gpu = cuda.mem_alloc(reco_normals.nbytes)
-        # cuda.memcpy_htod(reco_normals_gpu, reco_normals)
-
-        # copy stuff to gpu
-        reco_positions_gpu = cuda.mem_alloc(reco_positions.nbytes)
-        frequencies_gpu = cuda.mem_alloc(frequencies.nbytes)
-        tx_positions_gpu = cuda.mem_alloc(self.tx_positions.nbytes)
-        rx_positions_gpu = cuda.mem_alloc(self.rx_positions.nbytes)
-        reco_image_gpu = cuda.mem_alloc(reco_image.nbytes)
-
-        time_signal = np.ravel(time_signal)
-        if antenna_weights is not None:
-            time_signal = np.complex64(
-                time_signal*np.ravel(np.repeat(antenna_weights, len(frequencies))).transpose(2, 0, 1))
-            # time_signal = time_signal
-
-        time_signal_gpu = cuda.mem_alloc(time_signal.nbytes)
-
-        cuda.memcpy_htod(tx_positions_gpu, self.tx_positions / c)
-        cuda.memcpy_htod(rx_positions_gpu, self.rx_positions / c)
-        cuda.memcpy_htod(reco_positions_gpu, reco_positions / c)
-        cuda.memcpy_htod(time_signal_gpu, time_signal)
-        addr = mod.get_global("frequencies")
-        # move frequencies to __const__ memory
-        cuda.memcpy_htod(addr[0], frequencies * 2 * math.pi)
-
-        func = mod.get_function(
-            "holo_reco_sfcw_time_domain_custom_positions_hypotheses")
-
-        block_size = (32, 8, 1)
-        grid_size = (1,
-                     int(math.ceil(reco_positions_size / block_size[1])), 1)
-
-        func(
-            tx_positions_gpu,
-            self.num_tx_antennas,
-            rx_positions_gpu,
-            self.num_rx_antennas,
-            reco_positions_gpu,
-            reco_positions_size,
-            reco_image_gpu,
-            time_signal_gpu,
-            time_signal_length,
-            block=block_size, grid=grid_size)
-
-        cuda.memcpy_dtoh(reco_image, reco_image_gpu)
-
-        reco_image = reco_image.reshape(
-            reco_positions_size, self.rx_positions.shape[0] // 3, self.tx_positions.shape[0] // 3)
-
-        tx_positions_gpu.free()
-        rx_positions_gpu.free()
-        reco_positions_gpu.free()
-        reco_image_gpu.free()
-        time_signal_gpu.free()
-        frequencies_gpu.free()
-        # reco_normals_gpu.free()
-
-        return reco_image
-
-    def reconstruct_custom_positions_signal(self,  reco_positions, meas_data_cal,
-                                            frequencies, antenna_weights=None, reco_normals=None,
-                                            use_normal_weights=False):
-        """
-            In contrast to the regular SFCW reconstruction, this method does not use 
-            a voxel grid but instead takes 'reco_positions' (array of size Nx3) directly as
-            input for generating hypotheses
-        """
-        assert self.reconstruction_initialized, "You need to call initialize_reconstruction() before this method"
-
-        # print("Reconstruction for points: {} ({})".format(
-        #     reco_positions, reco_positions.shape))
-
-        mod = load_kernel_from_cu(os.path.join(
-            os.path.dirname(__file__), "cuda", "holo_reco_sfcw_optimized.cu"))
-
-        # time_signal = np.complex64(meas_data_cal.transpose(2, 0, 1))
-        time_signal = np.complex64(meas_data_cal)
-        time_signal_length = np.int32(len(frequencies))
-        frequencies = np.float32(frequencies)
-        reco_image = np.zeros(
-            (reco_positions.shape[0], self.rx_positions.shape[0] // 3, self.tx_positions.shape[0] // 3), dtype=np.complex64).reshape(-1)
-
-        reco_positions_size = np.int32((reco_positions.shape[0]))
-        if reco_normals is not None:
-            reco_positions = np.concatenate(
-                [reco_positions, reco_normals], axis=0).reshape(-1).astype(np.float32)
-        else:
-            reco_positions = reco_positions.reshape(-1).astype(np.float32)
-
-        c = 299792458.0
-        # reco_normals = reco_normals.reshape(-1).astype(np.float32)
-        # reco_normals_gpu = cuda.mem_alloc(reco_normals.nbytes)
-        # cuda.memcpy_htod(reco_normals_gpu, reco_normals)
-
-        # copy stuff to gpu
-        reco_positions_gpu = cuda.mem_alloc(reco_positions.nbytes)
-        frequencies_gpu = cuda.mem_alloc(frequencies.nbytes)
-        tx_positions_gpu = cuda.mem_alloc(self.tx_positions.nbytes)
-        rx_positions_gpu = cuda.mem_alloc(self.rx_positions.nbytes)
-        reco_image_gpu = cuda.mem_alloc(reco_image.nbytes)
-
-        time_signal = np.ravel(time_signal)
-        if antenna_weights is not None:
-            time_signal = np.complex64(
-                time_signal*np.ravel(np.repeat(antenna_weights, len(frequencies))).transpose(2, 0, 1))
-            # time_signal = time_signal
-
-        time_signal_gpu = cuda.mem_alloc(time_signal.nbytes)
-
-        cuda.memcpy_htod(tx_positions_gpu, self.tx_positions / c)
-        cuda.memcpy_htod(rx_positions_gpu, self.rx_positions / c)
-        cuda.memcpy_htod(reco_positions_gpu, reco_positions / c)
-        cuda.memcpy_htod(time_signal_gpu, time_signal)
-        addr = mod.get_global("frequencies")
-        # move frequencies to __const__ memory
-        cuda.memcpy_htod(addr[0], frequencies * 2 * math.pi)
-
-        func = mod.get_function(
-            "holo_reco_sfcw_time_domain_custom_positions_signal")
-
-        block_size = (32, 8, 1)
-        grid_size = (1,
-                     int(math.ceil(reco_positions_size / block_size[1])), 1)
-
-        func(
-            tx_positions_gpu,
-            self.num_tx_antennas,
-            rx_positions_gpu,
-            self.num_rx_antennas,
-            reco_positions_gpu,
-            reco_positions_size,
-            reco_image_gpu,
-            time_signal_gpu,
-            time_signal_length,
-            block=block_size, grid=grid_size)
-
-        cuda.memcpy_dtoh(reco_image, reco_image_gpu)
-
-        reco_image = reco_image.reshape(
-            reco_positions_size, self.rx_positions.shape[0] // 3, self.tx_positions.shape[0] // 3)
-
-        tx_positions_gpu.free()
-        rx_positions_gpu.free()
-        reco_positions_gpu.free()
-        reco_image_gpu.free()
-        time_signal_gpu.free()
-        frequencies_gpu.free()
-        # reco_normals_gpu.free()
-
-        return reco_image
+        return reco_data[:, :, :, 0]
 
     # overwrites method of 'RadarControllerBase'
+    def save_volume(self, reco_image, filepath, visualize=False, meta_output_directory="", force_save=False):
+        """
+            Stores a reconstructed volume as .ply file
+            As the holography correlation factor is stored as RGB attribute in range [0,1],
+            additional information about the maximum and minimum amplitude needs to be stored
+            in a metadata file 'calibration.json'
+        """
 
-    def extract_depth(self, reco_image, frequencies=None, amplitude_filter_threshold_dB=15,
-                      depth_filter_kernel_size=15, visualize=False):
+        # reco_image shape: [x,y,z]
+        assert os.path.exists(os.path.dirname(filepath))
+        frame_index = os.path.basename(filepath).split(".")[0]
+
+        if len(meta_output_directory) == 0 or not os.path.exists(meta_output_directory):
+            intrinsics_file = os.path.join(os.path.dirname(
+                filepath), "calibration.json")
+        else:
+            intrinsics_file = os.path.join(
+                meta_output_directory, "calibration.json")
+        if os.path.exists(intrinsics_file):
+            with open(intrinsics_file, 'r') as f:
+                try:
+                    json_data = json.load(f)
+                except Exception as e:
+                    print(e)
+                    json_data = {}
+        else:
+            json_data = {}
+
+        pixel_x, pixel_y, pixel_z = np.meshgrid(
+            self.grid_x_range, self.grid_y_range, self.grid_z_range)
+        xyz = np.stack(
+            [pixel_x, pixel_y, pixel_z], axis=-1)
+        intensity = np.abs(reco_image)
+        max_intensity = np.max(intensity).item()
+        min_intensity = np.min(intensity).item()
+        intensity = (np.abs(reco_image).reshape(-1) -
+                     min_intensity) / (max_intensity - min_intensity)
+
+        colors = np.stack([intensity, np.zeros_like(
+            intensity), np.zeros_like(intensity)], axis=-1)
+
+        pc = o3d.geometry.PointCloud()
+        pc.points = o3d.utility.Vector3dVector(
+            xyz.reshape(-1, 3))
+
+        pc.colors = o3d.utility.Vector3dVector(
+            colors)
+
+        if visualize:
+            visualizer = o3d.visualization.Visualizer()
+            visualizer.create_window()
+            visualizer.add_geometry(pc)
+            opt = visualizer.get_render_option()
+            opt.show_coordinate_frame = True
+            visualizer.run()
+            visualizer.destroy_window()
+
+        o3d.io.write_point_cloud(filepath, pc)
+        with open(intrinsics_file, "w") as f:
+            output = {}
+            output[frame_index] = {}
+            output[frame_index]["volume"] = {}
+            output[frame_index]["volume"]["min_amplitude"] = min_intensity
+            output[frame_index]["volume"]["max_amplitude"] = max_intensity
+            output[frame_index]["volume"]["bb_min"] = [self.grid_x_range.min().item(
+            ), self.grid_y_range.min().item(), self.grid_z_range.min().item()]
+            output[frame_index]["volume"]["bb_max"] = [self.grid_x_range.max().item(
+            ), self.grid_y_range.max().item(), self.grid_z_range.max().item()]
+            output[frame_index]["volume"]["grid_size"] = [
+                self.grid_x_range.shape[0], self.grid_y_range.shape[0], self.grid_z_range.shape[0]]
+
+            output, ret = self.merge_meta_data(
+                json_data, output, force=force_save)
+            if ret == False:
+                exit(0)
+
+            json.dump(output, f, sort_keys=True)
+
+    # overwrites method of 'RadarControllerBase'
+    def extract_depth(self, reco_image, _frequencies=None, amplitude_filter_threshold_dB=15,
+                      depth_filter_kernel_size=15, visualize=False, frequency_indices=None,
+                      rx_antenna_indices=None, tx_antenna_indices=None):
         return self.extract_depth_parabola_fit(reco_image,
                                                amplitude_filter_threshold_dB=amplitude_filter_threshold_dB,
                                                depth_filter_kernel_size=depth_filter_kernel_size, visualize=visualize)
@@ -1341,7 +1009,6 @@ class RadarControllerFSCW(RadarControllerBase):
         rec_data_max, intensity = self.maximum_projection(
             reco_image, amplitude_filter_threshold_dB=amplitude_filter_threshold_dB, visualize=visualize)
 
-        # Modification of Vanessa
         # set it to NaN first for filtering, later to 0
         nan_indices = np.argwhere(np.isnan(rec_data_max))
         nan_indices_row = nan_indices[:, 0]
@@ -1447,7 +1114,6 @@ class RadarControllerFSCW(RadarControllerBase):
             rec_data_max[rec_data_max < -
                          amplitude_filter_threshold_dB] = np.nan
 
-        # Modification of Vanessa
         # set it to NaN first for filtering, later to 0
         nan_indices = np.argwhere(np.isnan(rec_data_max))
         nan_indices_row = nan_indices[:, 0]
@@ -1596,3 +1262,266 @@ class RadarControllerFSCW(RadarControllerBase):
             visualizer.destroy_window()
 
         return pc, amplitude_valid
+
+
+class RadarControllerFSK(RadarControllerBase):
+    def __init__(self, host="127.0.0.1",
+                 port=24129,
+                 frequency_low_ghz=72,
+                 frequency_high_ghz=82,
+                 frequency_points=128,
+                 # directory where Rx.dat and Rx.dat are stored
+                 antenna_root=os.path.join(
+                     os.path.dirname(os.path.dirname(
+                         os.path.dirname(os.path.dirname(__file__)))),
+                     "data", "qar50sc"),
+                 averaging=1):
+
+        RadarControllerBase.__init__(self, frequency_low_ghz=frequency_low_ghz,
+                                     frequency_high_ghz=frequency_high_ghz, frequency_points=frequency_points,
+                                     antenna_root=antenna_root,
+                                     averaging=averaging, method="fsk")
+
+    def set_last_z_guess(self, last_z_guess):
+        self.last_z_guess = last_z_guess
+
+    # overwrites method of 'RadarControllerBase'
+    def reconstruct(self, meas_data_cal, _frequencies,
+                    antenna_weights=None, frequency_indices=None,
+                    rx_antenna_indices=None,
+                    tx_antenna_indices=None,
+                    compute_z_guess=True, last_z_guess=None):
+        """
+            Performs FSK reconstruction by generating hypotheses of Z
+        """
+        start = time.time()
+
+        assert self.reconstruction_initialized, "You need to call initialize_reconstruction() before this method"
+
+        assert len(
+            self.grid_z_range) == 1, "2FSK only has one z-value as first guess"
+
+        if last_z_guess is None:
+            self.last_z_guess = np.float64(self.grid_z_range_double[0])
+        else:
+            if len(last_z_guess.shape) > 1:
+                compute_z_guess = False
+            self.last_z_guess = np.float64(last_z_guess)
+
+        if type(self.last_z_guess) != np.ndarray:
+            last_z_guess = np.ones(
+                (self.grid_y_range.shape[0], self.grid_x_range.shape[0])) * self.last_z_guess
+        else:
+            last_z_guess = self.last_z_guess
+        self.first_z_guess = self.last_z_guess
+
+        tx_positions = self.tx_positions
+        rx_positions = self.rx_positions
+        if rx_antenna_indices is not None:
+            print("Using Rx antenna indices: {}".format(rx_antenna_indices))
+            meas_data_cal = meas_data_cal[rx_antenna_indices]
+            rx_positions = np.ravel(
+                rx_positions.reshape(-1, 3)[rx_antenna_indices])
+        if tx_antenna_indices is not None:
+            print("Using Tx antenna indices: {}".format(tx_antenna_indices))
+            meas_data_cal = meas_data_cal[:, tx_antenna_indices]
+            tx_positions = np.ravel(
+                tx_positions.reshape(-1, 3)[tx_antenna_indices])
+
+        if frequency_indices is not None and len(_frequencies) != len(frequency_indices):
+            frequencies = _frequencies[frequency_indices]
+            print("Using reduced frequency set: {}".format(frequency_indices))
+        else:
+            frequencies = _frequencies
+
+        if (frequency_indices is not None and meas_data_cal.shape[-1] != len(frequency_indices)):
+            meas_data_cal = meas_data_cal[:, :, frequency_indices]
+
+        assert len(frequencies) == 2, "2FSK method only works with 2 frequencies, but got: {}".format(
+            len(frequencies))
+
+        if compute_z_guess:
+
+            reco_image = self.holo_reconstruction_2fsk_cuda(
+                last_z_guess, meas_data_cal, frequencies, rx_positions, tx_positions)
+            z_position_adj = self.extract_depth(reco_image, _frequencies=frequencies,
+                                                amplitude_filter_threshold_dB=0,
+                                                depth_filter_kernel_size=1,
+                                                extract_maximum=True)
+
+            self.last_z_guess = z_position_adj
+            last_z_guess = self.last_z_guess
+
+        reco_image = self.holo_reconstruction_2fsk_cuda(
+            last_z_guess, meas_data_cal, frequencies, rx_positions, tx_positions)
+
+        return reco_image
+
+    def holo_reconstruction_2fsk_cuda(self,  z_guess, meas_data_cal, frequencies, rx_positions, tx_positions,
+                                      antenna_weights=None):
+        assert len(
+            z_guess.shape) > 1, "2FSK only works with z_guess image (H,W), not with single value"
+        C0 = 299792458
+
+        mod = load_kernel_from_cu(os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "cuda", "holo_reco_sfcw_optimized.cu"))
+
+        reco_image = np.zeros(
+            (self.grid_x_range.shape[0], self.grid_y_range.shape[0], len(frequencies)), dtype=np.complex64)
+        reco_image = np.ravel(reco_image)
+
+        time_signal = np.complex64(meas_data_cal)
+        time_signal_length = np.int32(len(frequencies))
+        frequencies = np.float32(frequencies)
+
+        # copy stuff to gpu
+        grid_x_range_gpu = cuda.mem_alloc(self.grid_x_range.nbytes)
+        grid_y_range_gpu = cuda.mem_alloc(self.grid_y_range.nbytes)
+        # in case z_guess is an image we have to flip the Y axis since
+        # the CUDA kernel goes from [-y, y] and an image usually is stored
+        # in [y, -y] manner
+        flipped = np.flipud(z_guess)
+
+        # reco_positions_z = np.flipud(np.array([z_guess])).ravel()
+        reco_positions_z = flipped.ravel()
+        reco_positions_z = reco_positions_z.astype(np.float32)
+        reco_positions_z_gpu = cuda.mem_alloc(reco_positions_z.nbytes)
+
+        # frequencies_gpu = cuda.mem_alloc(frequencies.nbytes)
+        tx_positions_gpu = cuda.mem_alloc(tx_positions.nbytes)
+        rx_positions_gpu = cuda.mem_alloc(rx_positions.nbytes)
+        reco_image_gpu = cuda.mem_alloc(reco_image.nbytes)
+
+        # transpose foe efficient data order on GPU
+        time_signal = np.ravel(np.transpose(time_signal, (2, 0, 1)))
+        if antenna_weights is not None:
+            time_signal = np.complex64(
+                time_signal*np.ravel(np.repeat(antenna_weights, len(frequencies))))
+            # time_signal = time_signal
+
+        time_signal_gpu = cuda.mem_alloc(time_signal.nbytes)
+
+        c = 299792458.0
+
+        cuda.memcpy_htod(grid_x_range_gpu, self.grid_x_range / c)
+        cuda.memcpy_htod(tx_positions_gpu, tx_positions / c)
+        cuda.memcpy_htod(rx_positions_gpu, rx_positions / c)
+        cuda.memcpy_htod(reco_image_gpu, reco_image)
+        cuda.memcpy_htod(time_signal_gpu, time_signal)
+        cuda.memcpy_htod(grid_y_range_gpu, self.grid_y_range / c)
+        cuda.memcpy_htod(reco_positions_z_gpu, reco_positions_z / c)
+        addr = mod.get_global("frequencies")
+        # move frequencies to __const__ memory
+        cuda.memcpy_htod(addr[0], frequencies * 2 * math.pi)
+
+        func = mod.get_function("holo_reco_fsk_time_domain")
+
+        x_steps = np.int32(len(self.grid_x_range))
+        y_steps = np.int32(len(self.grid_y_range))
+        z_steps = np.int32(1)
+
+        block_size = (32, 8, 1)  # 1 warp per point, 4 warps pers block
+        grid_size = (int(x_steps),
+                     int(math.ceil(y_steps / block_size[1])),
+                     int(z_steps))
+
+        func(
+            tx_positions_gpu,
+            np.int32(tx_positions.shape[0] // 3),
+            rx_positions_gpu,
+            np.int32(rx_positions.shape[0] // 3),
+            grid_x_range_gpu,
+            x_steps,
+            grid_y_range_gpu,
+            y_steps,
+            reco_positions_z_gpu,
+            reco_image_gpu,
+            time_signal_gpu,
+            time_signal_length,
+            block=block_size, grid=grid_size)
+
+        cuda.memcpy_dtoh(reco_image, reco_image_gpu)
+
+        reco_image = reco_image.reshape(
+            (self.grid_x_range.shape[0], self.grid_y_range.shape[0], len(frequencies)))
+        reco_image = reco_image / \
+            np.float32((rx_positions.shape[0] // 3)
+                       * (tx_positions.shape[0] // 3))
+
+        reco_image = np.rot90(reco_image, k=1, axes=(0, 1))
+
+        tx_positions_gpu.free()
+        rx_positions_gpu.free()
+        grid_x_range_gpu.free()
+        grid_y_range_gpu.free()
+        reco_positions_z_gpu.free()
+        reco_image_gpu.free()
+        time_signal_gpu.free()
+
+        return reco_image
+
+    # overwrites method of 'RadarControllerBase'
+    def extract_depth(self, reco_image,
+                      rec_data_max=None,
+                      _frequencies=None, amplitude_filter_threshold_dB=0,
+                      depth_filter_kernel_size=1, visualize=False,
+                      frequency_indices=None,
+                      rx_antenna_indices=None,
+                      tx_antenna_indices=None,
+                      extract_maximum=False,
+                      use_double=False,
+                      mean_range_per_pixel=None):
+
+        assert _frequencies is not None, "FSK method requires frequencies for determining depth"
+        C0 = 299792458
+
+        if frequency_indices is not None and len(_frequencies) != len(frequency_indices):
+            frequencies = _frequencies[frequency_indices]
+            print("Using reduced frequency set: {}".format(frequency_indices))
+        else:
+            frequencies = _frequencies
+
+        if not use_double:
+            frequencies = np.float32(frequencies)
+        assert len(frequencies) == 2, "2FSK method only works with 2 frequencies, but got: {}".format(
+            len(frequencies))
+
+        max_ind_y, max_ind_x = np.unravel_index(
+            np.argmax(np.abs(reco_image[:, :, 0])), reco_image.shape[:2])
+        delta_frequency = frequencies[1] - frequencies[0]
+
+        phase_difference = np.angle(
+            reco_image[:, :, 1] * np.conj(reco_image[:, :, 0]))
+        delta_z = C0*phase_difference/(4*np.pi*delta_frequency)
+
+        if rec_data_max is None:
+            rec_data_max, intensity = self.maximum_projection(
+                reco_image[:, :, 0], amplitude_filter_threshold_dB=amplitude_filter_threshold_dB, visualize=visualize)
+
+        # set it to NaN first for filtering, later to 0
+        nan_indices = np.argwhere(np.isnan(rec_data_max))
+        nan_indices_row = nan_indices[:, 0]
+        nan_indices_col = nan_indices[:, 1]
+        delta_z[nan_indices_row, nan_indices_col] = np.nan
+
+        # Averaging Filter
+        box_2D_kernel = convolution.Box2DKernel(depth_filter_kernel_size)
+        delta_z = convolution.convolve(
+            delta_z, box_2D_kernel, boundary='extend',  preserve_nan=True)
+
+        # set to 0 (as usual in depth cameras if value is invalid)
+        if extract_maximum:
+            delta_z = (delta_z[max_ind_y, max_ind_x])
+        else:
+            if mean_range_per_pixel is not None:
+                delta_z_per_pixel = delta_z * \
+                    (mean_range_per_pixel-delta_z) / \
+                    (self.last_z_guess - delta_z)/2
+                delta_z = delta_z_per_pixel
+
+        depth = np.real(np.ones_like(
+            reco_image[:, :, 0], dtype=np.float64) * (self.last_z_guess - delta_z))
+
+        depth[nan_indices_row, nan_indices_col] = 0
+
+        return depth

@@ -65,10 +65,6 @@ __global__ void holo_reco_sfcw_time_domain(
     float *reco_positions_y, int num_y_positions, float *reco_positions_z,
     int num_z_positions, cuComplex *reco_image, cuComplex *time_signal,
     const int time_signal_length) {
-  // int index_x = threadIdx.y + blockIdx.x * blockDim.y;
-  // int index_y = blockDim.y;
-  // int index_z = blockDim.z;
-
   int index_x = blockIdx.x;
   int index_y = threadIdx.y + blockIdx.y * blockDim.y;
   int index_z = blockIdx.z;
@@ -81,9 +77,6 @@ __global__ void holo_reco_sfcw_time_domain(
   reco_pos.x = reco_positions_x[index_x];
   reco_pos.y = reco_positions_y[index_y];
   reco_pos.z = reco_positions_z[index_z];
-  // printf("Thread (%i,%i,%i) Block (%i,%i,%i) -> Position (%i,%i,%i)\n",
-  //        threadIdx.x, threadIdx.y, threadIdx.z, blockIdx.x, blockIdx.y,
-  //        blockIdx.z, index_x, index_y, index_z);
 
   __shared__ float shared_delay_rx[8][96];
   __shared__ float shared_delay_tx[8][96];
@@ -115,8 +108,9 @@ __global__ void holo_reco_sfcw_time_domain(
       // we have 96*96 antenna combinations
       // each thread calculates (94*94)/32 antenna combinations
       // with the help of the precomputed (point,RX) and (point,TX) paths
-      float delay_rx = shared_delay_rx[threadIdx.y][index / 94];
-      float delay = shared_delay_tx[threadIdx.y][index % 94] + delay_rx;
+      float delay_rx = shared_delay_rx[threadIdx.y][index / num_tx_antennas];
+      float delay =
+          shared_delay_tx[threadIdx.y][index % num_tx_antennas] + delay_rx;
       cuComplex signal =
           time_signal[start_array_index +
                       index]; // time signal order: (frequency, RX, TX)
@@ -134,8 +128,76 @@ __global__ void holo_reco_sfcw_time_domain(
     int result_index = index_x * num_z_positions * num_y_positions +
                        index_y * num_z_positions + index_z;
     reco_image[result_index] = result;
-    // printf("(%i,%i,%i) Writing into %i\n", index_x, index_y, index_z,
-    //        result_index);
+  }
+}
+
+__global__ void holo_reco_fsk_time_domain(
+    float3 *tx_antennas, int num_tx_antennas, float3 *rx_antennas,
+    int num_rx_antennas, float *reco_positions_x, int num_x_positions,
+    float *reco_positions_y, int num_y_positions, float *reco_positions_z,
+    cuComplex *reco_image, cuComplex *time_signal,
+    const int time_signal_length) {
+  int index_x = blockIdx.x;
+  int index_y = threadIdx.y + blockIdx.y * blockDim.y;
+
+  if (index_x >= num_x_positions || index_y >= num_y_positions)
+    return;
+
+  float3 reco_pos;
+  reco_pos.x = reco_positions_x[index_x];
+  reco_pos.y = reco_positions_y[index_y];
+  reco_pos.z = reco_positions_z[index_y * num_x_positions + index_x];
+
+  __shared__ float shared_delay_rx[8][96];
+  __shared__ float shared_delay_tx[8][96];
+
+  // 1 warp (32 threads) calculate one point
+  // since we have 96 different (RX,point) paths and 96 different (TX, point)
+  // paths each thread calculates 3 (Rx,point) and 3 (TX,point)
+  shared_delay_rx[threadIdx.y][threadIdx.x] =
+      points_dist(reco_pos, rx_antennas[threadIdx.x]);
+  shared_delay_rx[threadIdx.y][threadIdx.x + 32] =
+      points_dist(reco_pos, rx_antennas[threadIdx.x + 32]);
+  shared_delay_rx[threadIdx.y][threadIdx.x + 64] =
+      points_dist(reco_pos, rx_antennas[threadIdx.x + 64]);
+  shared_delay_tx[threadIdx.y][threadIdx.x] =
+      points_dist(reco_pos, tx_antennas[threadIdx.x]);
+  shared_delay_tx[threadIdx.y][threadIdx.x + 32] =
+      points_dist(reco_pos, tx_antennas[threadIdx.x + 32]);
+  shared_delay_tx[threadIdx.y][threadIdx.x + 64] =
+      points_dist(reco_pos, tx_antennas[threadIdx.x + 64]);
+
+  int start_array_index = 0;
+
+  for (int t_index = 0; t_index < time_signal_length; t_index++) {
+    float frequency = frequencies[t_index];
+
+    cuComplex result = make_cuComplex(1e-3, 1e-3);
+    for (int index = threadIdx.x; index < num_rx_antennas * num_tx_antennas;
+         index += 32) {
+      // we have 96*96 antenna combinations
+      // each thread calculates (94*94)/32 antenna combinations
+      // with the help of the precomputed (point,RX) and (point,TX) paths
+      float delay_rx = shared_delay_rx[threadIdx.y][index / num_tx_antennas];
+      float delay =
+          shared_delay_tx[threadIdx.y][index % num_tx_antennas] + delay_rx;
+      cuComplex signal =
+          time_signal[start_array_index +
+                      index]; // time signal order: (frequency, RX, TX)
+      // compute cross-correlation and add to result
+      result = calculate(result, signal, delay, frequency);
+    }
+
+    start_array_index += num_tx_antennas * num_rx_antennas;
+    // accumulate result across all threads of a warp
+    // -> final cross-correlaion result
+    result = warpReduceSum(result);
+
+    if (threadIdx.x == 0) {
+      int result_index = index_x * time_signal_length * num_y_positions +
+                         index_y * time_signal_length + t_index;
+      reco_image[result_index] = result;
+    }
   }
 }
 
@@ -177,218 +239,6 @@ __global__ void holo_reco_sfcw_time_domain_custom_positions(
   }
   int result_index = index_x;
   reco_image[result_index] = result;
-}
-
-__global__ void holo_reco_sfcw_time_domain_custom_positions_noaggregate(
-    float3 *tx_antennas, int num_tx_antennas, float3 *rx_antennas,
-    int num_rx_antennas, float3 *reco_positions, int num_positions,
-    cuComplex *reco_image, cuComplex *time_signal,
-    const int time_signal_length) {
-  int index_x = threadIdx.y + blockIdx.y * blockDim.y;
-
-  if (index_x >= num_positions)
-    return;
-  float3 reco_pos = reco_positions[index_x];
-
-  __shared__ float shared_delay_rx[8][96];
-  __shared__ float shared_delay_tx[8][96];
-
-  // 1 warp (32 threads) calculate one point
-  // since we have 96 different (RX,point) paths and 96 different (TX, point)
-  // paths each thread calculates 3 (Rx,point) and 3 (TX,point)
-  shared_delay_rx[threadIdx.y][threadIdx.x] =
-      points_dist(reco_pos, rx_antennas[threadIdx.x]);
-  shared_delay_rx[threadIdx.y][threadIdx.x + 32] =
-      points_dist(reco_pos, rx_antennas[threadIdx.x + 32]);
-  shared_delay_rx[threadIdx.y][threadIdx.x + 64] =
-      points_dist(reco_pos, rx_antennas[threadIdx.x + 64]);
-  shared_delay_tx[threadIdx.y][threadIdx.x] =
-      points_dist(reco_pos, tx_antennas[threadIdx.x]);
-  shared_delay_tx[threadIdx.y][threadIdx.x + 32] =
-      points_dist(reco_pos, tx_antennas[threadIdx.x + 32]);
-  shared_delay_tx[threadIdx.y][threadIdx.x + 64] =
-      points_dist(reco_pos, tx_antennas[threadIdx.x + 64]);
-
-  // int start_array_index = 0;
-
-  for (int index = 0; index < num_rx_antennas * num_tx_antennas; index += 1) {
-    int rx_index = index / 94;
-    int tx_index = index % 94;
-
-    cuComplex result = make_cuComplex(1e-3, 1e-3);
-    for (int t_index = threadIdx.x; t_index < time_signal_length;
-         t_index = t_index + 32) {
-      float frequency = frequencies[t_index];
-
-      // we have 96*96 antenna combinations
-      // each thread calculates (94*94)/32 antenna combinations
-      // with the help of the precomputed (point,RX) and (point,TX) paths
-      float delay_rx = shared_delay_rx[threadIdx.y][rx_index];
-      float delay = shared_delay_tx[threadIdx.y][tx_index] + delay_rx;
-      int start_array_index = rx_index * num_tx_antennas * time_signal_length +
-                              tx_index * time_signal_length + t_index;
-
-      cuComplex signal =
-          time_signal[start_array_index]; // time signal order: (RX, TX,
-                                          // frequency) !!!!!
-
-      // compute cross-correlation and add to result
-      result = calculate(result, signal, delay, frequency);
-    }
-    result = warpReduceSum(result);
-    result.x -= 31 * 1e-3;
-    result.y -= 31 * 1e-3;
-
-    // start_array_index += time_signal_length;
-    if (threadIdx.x == 0) {
-      reco_image[index_x * num_rx_antennas * num_tx_antennas +
-                 rx_index * num_tx_antennas + tx_index] = result;
-    }
-  }
-}
-
-__global__ void holo_reco_sfcw_time_domain_custom_positions_hypotheses(
-    float3 *tx_antennas, int num_tx_antennas, float3 *rx_antennas,
-    int num_rx_antennas, float3 *reco_positions, int num_positions,
-    cuComplex *reco_image, cuComplex *time_signal,
-    const int time_signal_length) {
-  int index_x = threadIdx.y + blockIdx.y * blockDim.y;
-
-  if (index_x >= num_positions)
-    return;
-  float3 reco_pos = reco_positions[index_x];
-
-  __shared__ float shared_delay_rx[8][96];
-  __shared__ float shared_delay_tx[8][96];
-
-  // 1 warp (32 threads) calculate one point
-  // since we have 96 different (RX,point) paths and 96 different (TX, point)
-  // paths each thread calculates 3 (Rx,point) and 3 (TX,point)
-  shared_delay_rx[threadIdx.y][threadIdx.x] =
-      points_dist(reco_pos, rx_antennas[threadIdx.x]);
-  shared_delay_rx[threadIdx.y][threadIdx.x + 32] =
-      points_dist(reco_pos, rx_antennas[threadIdx.x + 32]);
-  shared_delay_rx[threadIdx.y][threadIdx.x + 64] =
-      points_dist(reco_pos, rx_antennas[threadIdx.x + 64]);
-  shared_delay_tx[threadIdx.y][threadIdx.x] =
-      points_dist(reco_pos, tx_antennas[threadIdx.x]);
-  shared_delay_tx[threadIdx.y][threadIdx.x + 32] =
-      points_dist(reco_pos, tx_antennas[threadIdx.x + 32]);
-  shared_delay_tx[threadIdx.y][threadIdx.x + 64] =
-      points_dist(reco_pos, tx_antennas[threadIdx.x + 64]);
-
-  // int start_array_index = 0;
-
-  for (int index = 0; index < num_rx_antennas * num_tx_antennas; index += 1) {
-    int rx_index = index / 94;
-    int tx_index = index % 94;
-
-    cuComplex result = make_cuComplex(1e-3, 1e-3);
-    for (int t_index = threadIdx.x; t_index < time_signal_length;
-         t_index = t_index + 32) {
-      float frequency = frequencies[t_index];
-
-      // we have 96*96 antenna combinations
-      // each thread calculates (94*94)/32 antenna combinations
-      // with the help of the precomputed (point,RX) and (point,TX) paths
-      float delay_rx = shared_delay_rx[threadIdx.y][rx_index];
-      float delay = shared_delay_tx[threadIdx.y][tx_index] + delay_rx;
-      int start_array_index = rx_index * num_tx_antennas * time_signal_length +
-                              tx_index * time_signal_length + t_index;
-
-      cuComplex signal =
-          time_signal[start_array_index]; // time signal order: (RX, TX,
-                                          // frequency) !!!!!
-
-      // compute cross-correlation and add to result
-      float x;
-      float y;
-      sincosf(frequency * delay, &y, &x);
-      result = make_cuComplex(result.x + x, result.y + y);
-
-      // result = calculate(result, signal, delay, frequency);
-    }
-    result = warpReduceSum(result);
-    result.x -= 31 * 1e-3;
-    result.y -= 31 * 1e-3;
-
-    // start_array_index += time_signal_length;
-    if (threadIdx.x == 0) {
-      reco_image[index_x * num_rx_antennas * num_tx_antennas +
-                 rx_index * num_tx_antennas + tx_index] = result;
-    }
-  }
-}
-
-__global__ void holo_reco_sfcw_time_domain_custom_positions_signal(
-    float3 *tx_antennas, int num_tx_antennas, float3 *rx_antennas,
-    int num_rx_antennas, float3 *reco_positions, int num_positions,
-    cuComplex *reco_image, cuComplex *time_signal,
-    const int time_signal_length) {
-  int index_x = threadIdx.y + blockIdx.y * blockDim.y;
-
-  if (index_x >= num_positions)
-    return;
-  float3 reco_pos = reco_positions[index_x];
-
-  __shared__ float shared_delay_rx[8][96];
-  __shared__ float shared_delay_tx[8][96];
-
-  // 1 warp (32 threads) calculate one point
-  // since we have 96 different (RX,point) paths and 96 different (TX, point)
-  // paths each thread calculates 3 (Rx,point) and 3 (TX,point)
-  shared_delay_rx[threadIdx.y][threadIdx.x] =
-      points_dist(reco_pos, rx_antennas[threadIdx.x]);
-  shared_delay_rx[threadIdx.y][threadIdx.x + 32] =
-      points_dist(reco_pos, rx_antennas[threadIdx.x + 32]);
-  shared_delay_rx[threadIdx.y][threadIdx.x + 64] =
-      points_dist(reco_pos, rx_antennas[threadIdx.x + 64]);
-  shared_delay_tx[threadIdx.y][threadIdx.x] =
-      points_dist(reco_pos, tx_antennas[threadIdx.x]);
-  shared_delay_tx[threadIdx.y][threadIdx.x + 32] =
-      points_dist(reco_pos, tx_antennas[threadIdx.x + 32]);
-  shared_delay_tx[threadIdx.y][threadIdx.x + 64] =
-      points_dist(reco_pos, tx_antennas[threadIdx.x + 64]);
-
-  // int start_array_index = 0;
-
-  for (int index = 0; index < num_rx_antennas * num_tx_antennas; index += 1) {
-    int rx_index = index / 94;
-    int tx_index = index % 94;
-
-    cuComplex result = make_cuComplex(1e-3, 1e-3);
-    for (int t_index = threadIdx.x; t_index < time_signal_length;
-         t_index = t_index + 32) {
-      float frequency = frequencies[t_index];
-
-      // we have 96*96 antenna combinations
-      // each thread calculates (94*94)/32 antenna combinations
-      // with the help of the precomputed (point,RX) and (point,TX) paths
-      float delay_rx = shared_delay_rx[threadIdx.y][rx_index];
-      float delay = shared_delay_tx[threadIdx.y][tx_index] + delay_rx;
-      int start_array_index = rx_index * num_tx_antennas * time_signal_length +
-                              tx_index * time_signal_length + t_index;
-
-      cuComplex signal =
-          time_signal[start_array_index]; // time signal order: (RX, TX,
-                                          // frequency) !!!!!
-
-      // compute cross-correlation and add to result
-
-      result = make_cuComplex(result.x + signal.x, result.y + signal.y);
-
-      // result = calculate(result, signal, delay, frequency);
-    }
-    result = warpReduceSum(result);
-    result.x -= 31 * 1e-3;
-    result.y -= 31 * 1e-3;
-
-    // start_array_index += time_signal_length;
-    if (threadIdx.x == 0) {
-      reco_image[index_x * num_rx_antennas * num_tx_antennas +
-                 rx_index * num_tx_antennas + tx_index] = result;
-    }
-  }
 }
 
 __global__ void holo_reco_sfcw_time_domain_custom_positions_weighted(
