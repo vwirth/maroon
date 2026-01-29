@@ -93,8 +93,8 @@ sudo apt-get ninja-build
 Then, install **version 1.3.0** of the SDK via:
 ```
 git clone https://github.com/microsoft/Azure-Kinect-Sensor-SDK.git
-git checkout v1.3.0
 cd Azure-Kinect-Sensor-SDK
+git checkout v1.3.0
 mkdir build && cd build
 cmake .. -GNinja
 ninja
