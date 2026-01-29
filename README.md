@@ -66,9 +66,9 @@ zenodo_get 18254440 -R 10 -g "0_maroon_v2_meta.zip"
 
 ## Dependencies
 
-* All basic dependencies are listed in `maroon/setup.py`. To install the `maroon` package, run:
+* All basic dependencies are listed in `code/setup.py`. To install the `maroon` package, run:
 ```
-cd code/maroon;
+cd code;
 python3 -m pip install setup.py 
 ```
 
